@@ -1,0 +1,874 @@
+---
+title: "Data Analytics"
+output:
+  html_document:
+    highlight: pygments
+    df_print: paged
+  pdf_document: default
+date: "2024-04-02"
+---
+## Assignment 2
+### Han Jiseong 
+ 20182543
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br/>
+
+### 대학 신입 경쟁률 예측
+
+kor_univ_stat.csv는 교육부에서 발표하는 대학 공시정보로 207개 4년제 대학의 주요 정보를 포함한다.
+
+• 년도 : 공시자료 발표년도 (2022, 2023)
+
+• 학교명 : 학교명
+
+• 설립유형 : 국립/사립/특별법법인
+
+• 지역 : 서울/경기/인천… (광역자치단체)
+
+• 입학정원 : 단위 (명)
+
+• 졸업생수 : 단위 (명)
+
+• 전임교원수 : 단위 (명)
+
+• 재학생수 : 단위 (명)
+
+• 신입생경쟁률 : 단위 (몇 대 1)
+
+• 신입생충원률 : 단위 (%)
+
+• 취업률: 단위 (%)
+
+• 외국인학생수 : 단위 (명)
+
+• 전임교원확보율 : 단위 (%)
+
+• 전임교원강의담당비율 : 단위 (%)
+
+• 인당연간장학금 : 단위 (원)
+
+• 연평균등록금 : 단위 (천원)
+
+• 학생1인당교육비 : 단위 (천원)
+
+• 기숙사수용율 : 단위 (%)
+
+• 학생1인당도서자료수 : 단위 (권)
+
+데이터셋의 나머지 정보를 활용하여 신입생경쟁률을 예측하는 linear regression 모델을 수립하고자 한다.
+
+```{r warning = FALSE, message = FALSE}
+# 사용할 패키지 추가
+library(class)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(ISLR)
+library(GGally)
+library(psych)
+library(vip)
+library(ggcorrplot)
+library(corrplot)
+library(rsample)
+library(leaps)
+library(glmnet)
+library(car)
+library(pls)
+```
+
+
+
+
+
+
+<br/>
+데이터 파일 불러오기 및 확인
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+
+univ_df = read.csv("kor_univ_stat.csv", fileEncoding = "euc-kr")
+str(univ_df)
+```
+
+<br/>
+
+#### 데이터셋의 나머지 정보를 활용하여 신입생경쟁률을 예측하는 linear regression 모델을 수립하고자 한다.
+
+<br/>
+
+다음 과정을 통해 분석에 필요한 데이터프레임을 준비한다.
+
+<br/>
+a) 범주형 변수는 factor로 변환
+
+```{r warning = FALSE, message = FALSE}
+# 데이터프레임의 열을 순회하면서 범주형 변수를 factor로 변환
+for (col in names(univ_df)) {
+  if (is.character(univ_df[[col]])) { # 열이 문자열인 경우에만 처리
+    univ_df[[col]] <- as.factor(univ_df[[col]])
+  }
+}
+
+#년도는 범주형으로 취급해야함
+univ_df$년도 <- factor(univ_df$년도)
+
+str(univ_df)
+```
+<br/>
+년도는 범주형으로 취급
+<br/>
+
+b) 결측치 포함한 행 제거
+```{r warning = FALSE, message = FALSE}
+univ_df <- na.omit(univ_df)
+
+str(univ_df)
+```
+
+
+<br/>
+c) 재학생 100명 미만인 대학의 데이터 제거
+```{r warning = FALSE, message = FALSE}
+univ_df <- univ_df %>%
+  filter(재학생 >= 100)
+
+str(univ_df)
+```
+
+<br/>
+d) “학교명”과 “신입생충원율”은 feature에서 제외
+```{r warning = FALSE, message = FALSE}
+univ_df <- select(univ_df, -학교명, -신입생충원율)
+str(univ_df)
+```
+<br/>
+변수들 간의 상관 관계를 다양한 그래프를 활용하여 시각화해보고, 이로부터 데이터의 특성을 분석해보자.
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+
+# 데이터 프레임에서 타겟(신입생 경쟁률) 변수를 제거
+ntarget_univ_df <- subset(univ_df, select = -c(신입생경쟁률))
+
+
+numeric_univ_df <- ntarget_univ_df[, sapply(ntarget_univ_df, is.numeric)]
+
+str(numeric_univ_df)
+
+```
+```{r warning = FALSE, message = FALSE}
+# 상관관계 행렬 계산
+correlation_matrix <- cor(numeric_univ_df)
+
+# 상관 히트맵 그리기
+cor_uni <- round(correlation_matrix, 2)
+
+ggcorrplot(cor_uni, type = "lower")
+
+```
+
+
+```{r warning = FALSE, message = FALSE}
+ggpairs(numeric_univ_df[c("입학정원","졸업생수","전임교원수","재학생","외국인학생수",
+                          "학생1인당연간장학금","기숙사수용율","기숙사수용율")])
+```
+
+```{r warning = FALSE, message = FALSE}
+pairs.panels(numeric_univ_df[c("입학정원","졸업생수","전임교원수","재학생","외국인학생수",
+                               "학생1인당연간장학금","기숙사수용율","기숙사수용율")])
+```
+
+<br/>
+일부 변수들 간의 높은 상관관계가 있는 것을 확인하였다. 일반적으로 두 변수간의 상관계수가 0.8이상이면 다중공선성을 의심해볼 수 있다. VIF를 통해 다중공선성을 확인해 볼 필요가 있다.
+<br/>
+
+
+3. Stratified sampling을 통해 traing set과 test set을 70:30 비율로 분할한다. 그리고 training set을
+활용하여 linear regression model을 수립하자. 이때 모든 feature 변수를 모델에 포함시킨다.
+
+<br/>
+stratified sampling 수행
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+# Stratified sampling을 통해 traing set과 test set을 7:3 비율로 분할
+
+set.seed(7)
+
+split <- initial_split(univ_df, prop = 0.7, strata = "신입생경쟁률")
+df_train <- training(split)
+df_test <- testing(split)
+
+ggplot(df_train, aes(x = 신입생경쟁률)) + geom_density(color="darkred") +
+geom_density(data = df_test, aes(x = 신입생경쟁률), color="darkblue") +
+theme_bw()
+
+```
+<br/>
+두 그래프가 유사한 것으로 보아 train과 test set의 분할이 고르게 이루어졌음을 확인할 수 있다. 
+<br/>
+
+a) Linear regression 결과를 분석해보자.
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+model_lm <- lm(신입생경쟁률~., data = df_train)
+
+summary(model_lm)
+```
+
+<br/>
+모델은 약 66.72%의 종속 변수 분산을 설명하며 "설립유형특별법법인", "지역명서울", "전임교원수"와 같은 일부 변수들은 통계적으로 유의미한 것으로 나타난 반면, "년도", "지역명경남"와 같은 일부 변수는 통계적으로 유의미하지 않은 것으로 나타났다는 것을 확인 할 수 있다.
+<br/>
+
+b) Training set에 대한 예측 오차와 test set에 대한 예측 오차를 각각 계산해보고, 결과를 분석해보자.
+
+```{r warning = FALSE, message = FALSE}
+#예측값 계산
+df_train_pred = predict(model_lm, df_train)
+df_test_pred = predict(model_lm, df_test)
+
+# RMSE 계산
+train_rmse <- RMSE(df_train_pred, df_train$신입생경쟁률)
+test_rmse <- RMSE(df_test_pred, df_test$신입생경쟁률)
+
+train_rmse
+
+test_rmse
+
+```
+<br/>
+train_set의 RMSE는 약 2.574, test_set의 RMSE는 약 4.356이 나왔다.
+<br/>
+
+c) Random seed를 바꾸어 Training/Test set의 분할을 다르게 하여 a), b)를 다섯 번 반복해보자. Training set과 test set의 예측 오차에 대한 어떠한 경향을 관찰할 수 있는가?
+
+```{r warning = FALSE, message = FALSE}
+for (i in 1:5) {
+  
+  # 반복문 돌 때마다 시드 다르게 지정
+  set.seed(i)
+  
+  # 데이터 분할
+  split <- initial_split(univ_df, prop = 0.7, strata = "신입생경쟁률")
+  df_train <- training(split)
+  df_test <- testing(split)
+  
+  # 모델 학습
+  model_lm <- lm(신입생경쟁률 ~ ., data = df_train)
+  
+  # 예측값 계산
+  df_train_pred <- predict(model_lm, newdata = df_train)
+  df_test_pred <- predict(model_lm, newdata = df_test)
+
+  # RMSE 계산
+  train_rmse <- RMSE(df_train_pred, df_train$신입생경쟁률)
+  test_rmse <- RMSE(df_test_pred, df_test$신입생경쟁률)
+  
+  print(train_rmse)
+  print(test_rmse)
+  
+  # 줄바꿈
+  cat("\n")
+}
+```
+<br/>
+Random Seed를 다르게 할 때마다 Training set과 test set의 예측 오차는 계속 달라짐을 볼 수 있다. 허나 계속 달라진다 하더라도 그 어떠한 경향을 볼 수 없다. 이는 Random Seed는 임의의 난수이지 이를 다르게 한다고 하여 추가적으로 의미가 생기는게 아니기 때문이라고 생각한다. train set의 RMSE가 test set의 RMSE가 낮은 것을 볼 수 있는데 이는 단지 모델이 학습을 train set으로 하기 때문에 train set의 RMSE가 더 낮은 것이다.
+<br/>
+
+
+강의와 실습에서 다룬 여러 기법을 활용하여 3번의 linear regression 모델을 개선시켜 본다. 아래 세 가
+지 기법에 대해 각각 Parameter tuning을 통해 best parameter를 선택해 보자. 어떠한 모델이 만들어
+지는가? 그리고 만들어진 모델의 traing set과 test set의 예측오차를 비교해 보자.
+
+```{r warning = FALSE, message = FALSE}
+# 반복문 돌 때마다 시드 다르게 지정
+set.seed(7)
+  
+# 데이터 분할
+split <- initial_split(univ_df, prop = 0.7, strata = "신입생경쟁률")
+df_train <- training(split)
+df_test <- testing(split)
+  
+# 모델 학습
+model_lm <- lm(신입생경쟁률 ~ ., data = df_train)
+  
+# 예측값 계산
+df_train_pred <- predict(model_lm, newdata = df_train)
+df_test_pred <- predict(model_lm, newdata = df_test)
+
+# RMSE 계산
+train_rmse <- RMSE(df_train_pred, df_train$신입생경쟁률)
+test_rmse <- RMSE(df_test_pred, df_test$신입생경쟁률)
+  
+print(train_rmse)
+print(test_rmse)
+print(test_rmse - train_rmse)
+```
+
+
+a) Stepwise selection
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+# best subset selection up to 17 features
+reg_full <- regsubsets(신입생경쟁률 ~ ., data = df_train, nvmax = 17)
+reg_summary <- summary(reg_full)
+
+# compare adjusted r2 for 19 models generated from best subset selection
+reg_summary$adjr2
+
+result <- data.frame(numvars = rep(1:17,2), val = c(reg_summary$rsq,reg_summary$adjr2), 
+                     type=c(rep("rsq", 17),rep("adjr2", 17)))
+
+# plot R2 and adjusted R2 in the same graph as a function of # variables
+ggplot(result, aes(x=numvars, y=val, color= type)) + geom_point() +
+geom_line() + labs(x="# variables", y="", color="") +
+scale_color_discrete(labels = c("Adjusted R2", "R2"))+ theme_bw()
+```
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+max(reg_summary$adjr2)
+
+which.max(reg_summary$adjr2)
+```
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+# get regression coefficient of the best model
+coef <- coef(reg_full, 17)
+coef
+
+# get matrix consisting of only feature variables
+test.mat <- model.matrix(신입생경쟁률~., data = df_test)
+# compute predicted salary for test set
+test_pred <- test.mat[, names(coef)] %*% coef
+# compute test set RMSE
+RMSE(test_pred, df_test$신입생경쟁률)
+
+# get matrix consisting of only feature variables
+train.mat <- model.matrix(신입생경쟁률~., data = df_train)
+# compute predicted salary for test set
+train_pred <- train.mat[, names(coef)] %*% coef
+# compute test set RMSE
+RMSE(train_pred, df_train$신입생경쟁률)
+```
+<br/>
+forward stepwise selection 사용
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+reg_fwd <- regsubsets(신입생경쟁률~., data = df_train, nvmax = 17, method="forward")
+reg_fwd_summary <- summary(reg_fwd)
+max(reg_fwd_summary$adjr2)
+
+which.max(reg_fwd_summary$adjr2)
+
+coef_fwd <- coef(reg_fwd, 17)
+coef_fwd
+
+test_pred_fwd <- test.mat[, names(coef_fwd)] %*% coef_fwd
+test_rmse = RMSE(test_pred_fwd, df_test$신입생경쟁률)
+
+train_pred <- train.mat[, names(coef)] %*% coef
+train_rmse = RMSE(train_pred, df_train$신입생경쟁률)
+
+test_rmse
+train_rmse
+test_rmse - train_rmse
+```
+
+```{r warning = FALSE, message = FALSE}
+# set cross validation option
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+set.seed(7)
+
+fwd_model <- train(신입생경쟁률 ~., data = df_train, method = "leapForward",
+tuneGrid = data.frame(nvmax = 1:17), trControl = train.control)
+fwd_model
+
+fwd_model$bestTune
+
+ggplot(fwd_model$results, aes(x=nvmax, y=RMSE)) + geom_point() + geom_line() + theme_bw()
+coef_fwd_cv <- coef(fwd_model$finalModel, fwd_model$bestTune$nvmax)
+```
+
+```{r warning = FALSE, message = FALSE}
+test_pred_fwd_cv <- predict(fwd_model, df_test)
+train_pred_fwd_cv <- predict(fwd_model, df_train)
+RMSE(test_pred_fwd_cv, df_test$신입생경쟁률)
+RMSE(train_pred_fwd_cv, df_train$신입생경쟁률)
+RMSE(test_pred_fwd_cv, df_test$신입생경쟁률) - RMSE(train_pred_fwd_cv, df_train$신입생경쟁률)
+```
+
+
+<br/>
+backward stepwise selection 사용
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+reg_bwd <- regsubsets(신입생경쟁률~., data = df_train, nvmax = 17, method="backward")
+reg_bwd_summary <- summary(reg_bwd)
+max(reg_bwd_summary$adjr2)
+
+which.max(reg_bwd_summary$adjr2)
+
+coef_bwd <- coef(reg_bwd, 17)
+coef_bwd
+
+test_pred_bwd <- test.mat[, names(coef_bwd)] %*% coef_bwd
+test_rmse = RMSE(test_pred_bwd, df_test$신입생경쟁률)
+
+train_pred <- train.mat[, names(coef)] %*% coef
+train_rmse = RMSE(train_pred, df_train$신입생경쟁률)
+
+test_rmse
+train_rmse
+test_rmse - train_rmse
+```
+```{r warning = FALSE, message = FALSE}
+# set cross validation option
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+set.seed(7)
+
+bwd_model <- train(신입생경쟁률 ~., data = df_train, method = "leapBackward",
+tuneGrid = data.frame(nvmax = 1:17), trControl = train.control)
+bwd_model
+
+bwd_model$bestTune
+
+ggplot(bwd_model$results, aes(x=nvmax, y=RMSE)) + geom_point() + geom_line() + theme_bw()
+coef_bwd_cv <- coef(bwd_model$finalModel, bwd_model$bestTune$nvmax)
+```
+```{r warning = FALSE, message = FALSE}
+test_pred_bwd_cv <- predict(bwd_model, df_test)
+train_pred_bwd_cv <- predict(bwd_model, df_train)
+RMSE(test_pred_bwd_cv, df_test$신입생경쟁률)
+RMSE(train_pred_bwd_cv, df_train$신입생경쟁률)
+RMSE(test_pred_bwd_cv, df_test$신입생경쟁률) - RMSE(train_pred_bwd_cv, df_train$신입생경쟁률)
+```
+
+<br/>
+backward stepwise selection이 train과 test 셋에 관한 rmse 더 작으므로 backward stepwise selection이 더 성능이 좋다고 할 수 있다.
+<br/>
+
+b) Regularization
+
+<br/>
+
+rigde regression
+<br/>
+```{r warning = FALSE, message = FALSE}
+X <- model.matrix(신입생경쟁률~., df_train)[, -1]
+Y <- df_train$신입생경쟁률
+ridge <- glmnet(x = X, y = Y, alpha = 0)
+
+plot(ridge, xvar="lambda")
+```
+```{r warning = FALSE, message = FALSE}
+# lambda 값 출력
+ridge$lambda
+
+dim(coef(ridge))
+
+ridge$lambda[50]
+
+coef(ridge)[,50]
+
+coef(ridge)[,80]
+
+```
+<br/>
+```{r warning = FALSE, message = FALSE}
+# ridge regression에 대한 cross validation
+set.seed(7)
+cv_ridge <- cv.glmnet(x = X, y = Y, alpha = 0, nfolds = 10)
+plot(cv_ridge)
+```
+
+```{r warning = FALSE, message = FALSE}
+# ridge regression에서 MSE를 가장 작게 하는 best lambda 값
+best_lambda_ridge <- cv_ridge$lambda.min
+best_lambda_ridge
+
+# dataset에 대해 best lambda model의 성능을 평가
+testX <- model.matrix(신입생경쟁률~., df_test)[,-1]
+trainX <- model.matrix(신입생경쟁률~., df_train)[,-1]
+ridge_test_pred <- predict(ridge, s = best_lambda_ridge, newx = testX)
+ridge_train_pred <- predict(ridge, s = best_lambda_ridge, newx = trainX)
+# caret package의 RMSE 계산 함수
+RMSE(ridge_test_pred, df_test$신입생경쟁률)
+RMSE(ridge_train_pred, df_train$신입생경쟁률)
+RMSE(ridge_test_pred, df_test$신입생경쟁률) - RMSE(ridge_train_pred, df_train$신입생경쟁률)
+```
+
+
+<br/>
+lasso regression
+<br/>
+```{r warning = FALSE, message = FALSE}
+X <- model.matrix(신입생경쟁률~., df_train)[, -1]
+Y <- df_train$신입생경쟁률
+lasso <- glmnet(x = X, y = Y, alpha = 1)
+
+plot(lasso, xvar="lambda")
+```
+```{r warning = FALSE, message = FALSE}
+# lambda 값 출력
+lasso$lambda
+
+dim(coef(lasso))
+
+lasso$lambda[50]
+
+coef(lasso)[,50]
+
+coef(lasso)[,80]
+
+```
+<br/>
+```{r warning = FALSE, message = FALSE}
+# lasso regression에 대한 cross validation
+set.seed(7)
+cv_lasso <- cv.glmnet(x = X, y = Y, alpha = 1, nfolds = 10)
+plot(cv_lasso)
+```
+```{r warning = FALSE, message = FALSE}
+# lasso regression에서 MSE를 가장 작게 하는 best lambda 값
+best_lambda_lasso <- cv_lasso$lambda.min
+best_lambda_lasso
+
+
+lasso_test_pred <- predict(lasso, s = best_lambda_lasso, newx = testX)
+lasso_train_pred <- predict(lasso, s = best_lambda_lasso, newx = trainX)
+# caret package의 RMSE 계산 함수
+RMSE(lasso_test_pred, df_test$신입생경쟁률)
+RMSE(lasso_train_pred, df_train$신입생경쟁률)
+RMSE(lasso_test_pred, df_test$신입생경쟁률) - RMSE(lasso_train_pred, df_train$신입생경쟁률)
+```
+
+lasso regression model이 train과 test 셋에 관한 rmse 더 작으므로 lasso regression model이 더 성능이 좋다고 할 수 있다.
+
+<br/>
+
+traing set과 test set을 모두 포함하는 전체 dataset을 대상으로 best 값을 가지는 ridge regression, lasso regression의 최종 model
+
+
+```{r warning = FALSE, message = FALSE}
+fullX <- model.matrix(신입생경쟁률~., univ_df)[,-1]
+fullY <- univ_df$신입생경쟁률
+
+ridge_full <- glmnet(x = fullX, y = fullY, alpha = 0)
+predict(ridge_full, s = best_lambda_ridge, type = "coefficients")[1:20,]
+
+lasso_full <- glmnet(x = fullX, y = fullY, alpha = 1)
+predict(lasso_full, s = best_lambda_lasso, type = "coefficients")[1:20,]
+```
+
+```{r}
+set.seed(7)
+ridge_model <- train(신입생경쟁률~., data = df_train, method = "glmnet",
+tuneGrid = data.frame(alpha=0, lambda=seq(0, 100, length =100)), trControl =
+trainControl(method="repeatedcv", number = 10, repeats = 5))
+
+ridge_model
+
+ggplot(ridge_model)
+ridge_model$bestTune
+
+ridge_pred <- predict(ridge_model, df_test)
+RMSE(ridge_pred, df_test$신입생경쟁률)
+```
+
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+lasso_model <- train(신입생경쟁률~., data = df_train, method = "glmnet",
+                    tuneGrid = data.frame(alpha=1, lambda=seq(0, 3, length=100)),
+                     trControl=trainControl(method="repeatedcv", number=10, repeats=10), selectionFunction="oneSE")
+
+lasso_model
+
+ggplot(lasso_model)
+lasso_model$bestTune
+
+lasso_pred <- predict(lasso_model, df_test)
+RMSE(lasso_pred, df_test$신입생경쟁률)
+```
+<br/>
+
+c) Principal componets regression
+
+<br/>
+```{r warning = FALSE, message = FALSE}
+reg <- lm(신입생경쟁률~., data = df_train)
+vif(reg)
+```
+<br/>
+VIF가 10이 넘어가는 feature가 4개나 되므로 feature 사이 매우 강한 다중공선성이 존재함을 확인할 수 있다.
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+
+cv_pcr <- pcr(신입생경쟁률~., data = df_train, scale = TRUE, center = TRUE, validation = "CV")
+summary(cv_pcr)
+```
+<br/>
+대체적으로 80%이상의 설명력을 가지는 경우 모델의 신뢰성이 있다고 판단할 수 있다. pcr을 수행했을 때 17개의 주성분을 사용하였을때 모델의 설명력이 80.99%이므로 17개의 주성분을 사용하는 것이 바람직하다.
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+validationplot(cv_pcr)
+# 2개의 주성분을 가지는 model에 대해 test set RMSE 계산
+pcr_pred <- predict(cv_pcr, df_test, ncomp = 17)
+RMSE(pcr_pred, df_test$신입생경쟁률)
+```
+<br/>
+주성분의 수가 29개일때 cross-validated RMSE 값이 가장 작지만, 주성분이 6개일때에도 RMSE 값은 크게 차이가 없음을 확인할 수 있다.
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+pcr_final <- pcr(Salary~., data=Hitters, scale = TRUE, ncomp =1)
+summary(pcr_final)
+```
+```{r warning = FALSE, message = FALSE}
+set.seed(7)
+cv_pcr2 <- train(신입생경쟁률 ~ ., data = df_train, method = "pcr", trControl =
+trainControl(method = "repeatedcv", number = 10, repeats = 10), preProcess =
+c("center", "scale"), tuneGrid = data.frame(ncomp=1:33))
+cv_pcr2
+```
+```{r warning = FALSE, message = FALSE}
+ggplot(cv_pcr2) + theme_bw()
+cv_pcr2$bestTune
+
+
+summary(cv_pcr2$finalModel)
+
+pcr2_pred <- predict(cv_pcr2, df_test)
+```
+
+
+feature들의 제곱항이나 두 feature 사이의 interaction들을 새로운 feature로 추가하여 linear regression model을 만들어보자. 모델의 성능의 개선 효과가 있는가? (모든 feature들 사이의interaction을 모델에 추가하면 training data의 수에 비해 feature의 수가 매우 많아져서 모델 생성이 어려울 수 있다. 의미가 있는 제곱항이나 interaction들을 모델에 추가시키자.)
+
+
+```{r warning = FALSE, message = FALSE}
+# 재학생증감비율 계산하여 새로운 열 추가하기 (분모가 0인 경우 처리)
+univ_df$재학생증감비율 <- ifelse(univ_df$졸업생수 == 0, 0, univ_df$입학정원 / univ_df$졸업생수)
+
+# 외국인 학생 비율 계산하여 새로운 열 추가하기 (분모가 0인 경우 처리)
+univ_df$외국인학생비율 <- ifelse(univ_df$재학생 == 0, 0, univ_df$외국인학생수 / univ_df$재학생)
+
+
+str(univ_df)
+```
+<br/>
+입학정원 / 졸업생 을 계산해서 '재학생증감비율' 컬럼을 생성 -> 클수록 총 재학생은 증가, 작을수록 총 재학생은 감소한다는 것을 의미하는 파생변수
+외국인학생 / 재학생 을 계산해서 '외국인 학생 비율' 컬럼을 생성 -> 총 재학생 중 외국인 학생의 비율을 나타내는 파생변수
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+
+set.seed(7)
+  
+# 데이터 분할
+split <- initial_split(univ_df, prop = 0.7, strata = "신입생경쟁률")
+df_train <- training(split)
+df_test <- testing(split)
+  
+# 모델 학습
+model_lm <- lm(신입생경쟁률 ~ ., data = df_train)
+summary(model_lm)
+
+df_train_pred = predict(model_lm, df_train)
+df_test_pred = predict(model_lm, df_test)
+
+# RMSE 계산
+train_rmse <- RMSE(df_train_pred, df_train$신입생경쟁률)
+test_rmse <- RMSE(df_test_pred, df_test$신입생경쟁률)
+
+train_rmse
+
+test_rmse
+```
+
+<br/>
+파생변수 생성 전 train set의 RMSE가 3.238279, test set의 RMSE가 2.573558이었고 파생변수 생성 후 train set의 RMSE가 3.226677, test set의 RMSE가 2.531757이라는 결과가 나왔다. 모델의 성능이 소폭 개선되었음을 볼 수 있다.
+<br/>
+
+#### 2. Lasso Regression의 효과
+
+<br/>
+먼저 아래와 같이 랜덤으로 데이터를 생성하자.
+<br/>
+
+(i) rnorm() 함수를 활용해서 평균이 0, 표준편차가 1인 표준정규분포로부터 크기가 100인 vector X를 생성하고, 평균이 0, 표준편차가 4인 정규분포로부터 크기가 100인 오차 vector ϵ을 생성한다. X와 ϵ을 생성하기 위한 rnorm() 함수에 대해서 동일한 random seed 값을 사용하지 않도록 주의하자.
+
+(ii) 크기가 100인 target vector Y를 다음 식을 사용하여 생성한다.       Y = 1 + 2X − 4X^2 + 3X^3 + ϵ
+
+<br/>
+데이터 생성
+
+```{r warning = FALSE, message = FALSE}
+set.seed(123) # 랜덤 시드 설정
+
+# X 생성 (평균이 0, 표준편차가 1인 표준정규분포)
+X <- rnorm(100, mean = 0, sd = 1)
+
+# 오차 벡터 생성 (평균이 0, 표준편차가 4인 정규분포)
+set.seed(456) # 다른 시드값 사용
+epsilon <- rnorm(100, mean = 0, sd = 4)
+
+# (ii) target vector Y 생성
+Y <- 1 + 2*X - 4*X^2 + 3*X^3 + epsilon
+```
+
+
+<br/>
+즉, i번째 관측치 Yi값은 세 가지 feature X, X^2, X^3에 대한 선형식에 오차 ϵi를 더한 것과 같다. 위의 선형 관계식을 모른 채 100개의 관측치만 주어졌을 때 이를 추정하기 위한 regression model을 아래의 순서대로 만들어보자. 즉, 실제 regression coefficient β0 = 1 β1 = 2 β2 = − 4 β3 = 3를 데이터로부터 추정해야 한다.
+<br/>
+
+1. X, X^2, X^3…, X^10 의 10개 변수를 feature로, Y를 target으로 설정하자. 이때 feature 변수들과 target 변수 사이의 상관관계를 시각화해보자.
+```{r warning = FALSE, message = FALSE}
+# 데이터 프레임 생성
+data <- data.frame(X = X, X2 = X^2, X3 = X^3, X4 = X^4, X5 = X^5, X6 = X^6, X7 = X^7, X8 = X^8, X9 = X^9, X10 = X^10, Y = Y)
+
+# 상관관계 계산
+correlation_matrix <- cor(data)
+
+# 상관 히트맵 그리기
+cor_uni <- round(correlation_matrix, 2)
+
+ggcorrplot(cor_uni, type = "lower")
+```
+
+<br/>
+2. 10개의 feature를 모두 포함하는 linear regression model을 만들어보자. 통계적으로 유의한 변수가 있는가? regression coefficient βĵ 값을 실 제βj 값과 비교해보자.
+```{r warning = FALSE, message = FALSE}
+# 모든 feature를 포함한 선형 회귀 모델 생성
+lm_model <- lm(Y ~ ., data = data)
+
+# 회귀 모델 요약
+summary(lm_model)
+
+# 회귀 계수 출력
+coefficients <- coef(lm_model)
+print(coefficients)
+
+# 실제 회귀 계수와 비교
+true_coefficients <- c(1, 2, -4, 3, rep(0, 6))  # β0부터 β3까지 실제 값은 알고 있음
+true_coefficients <- c(true_coefficients, rep(0, length(coefficients) - length(true_coefficients)))  # 나머지 회귀 계수에는 0을 추가
+names(true_coefficients) <- names(coefficients)
+
+# 추정된 회귀 계수와 실제 회귀 계수 비교
+comparison <- data.frame(estimated = coefficients, true = true_coefficients)
+print(comparison)
+```
+<br/>
+X, X4, X6, X8, X10 는 p-value가 0.05보다 작으므로 통계적으로 유의한 것으로 간주 할 수 있다.
+
+regression coefficient βĵ 값을 실 제βj 값과 비교했을 때 값의 차이가 크므로 모델이 데이터를 잘 설명하지 못한다고 할 수 있다.
+
+<br/>
+3. X, X^2, X^3의 개 변수를 feature로, Y를 target으로 linear regression model을 만들어보자. 모든 feature들이 통계적으로 유의한가? regression coefficient βĵ 값을 실 제βj 값과 비교해보자.
+```{r warning = FALSE, message = FALSE}
+# 데이터 프레임 생성
+data <- data.frame(X = X, X2 = X^2, X3 = X^3, Y = Y)
+
+# 선형 회귀 모델 생성
+lm_model <- lm(Y ~., data = data)
+
+# 회귀 모델 요약
+summary(lm_model)
+
+# 회귀 계수 출력
+coefficients <- coef(lm_model)
+print(coefficients)
+
+# 실제 회귀 계수와 비교
+true_coefficients <- c(1, 2, -4, 3)  # β0부터 β3까지 실제 값은 알고 있음
+names(true_coefficients) <- names(coefficients)
+
+# 추정된 회귀 계수와 실제 회귀 계수 비교
+comparison <- data.frame(estimated = coefficients, true = true_coefficients)
+print(comparison)
+```
+<br/>
+모든 feature들의 p-value가 0.05보다 작으므로 모든 feature들이 통계적으로 유의하다고 할 수 있다.
+
+regression coefficient βĵ 값을 실 제βj 값과 비교했을 때 값의 차이가 작으므로 모델이 데이터를 잘 설명한다고 할 수 있다.
+<br/>
+4. X, X^2, X^3…, X^10 의 10개 변수를 feature로, 를 target으로 Lasso regression model을 만들어 본다. Cross validation을 통해 합리적인 모델을 찾아보자. 이 모델에는 어떤 변수가 포함되었는가? regression coefficient 값을 실제  β값과 비교해보자. 그리고 결과를 바탕으로 Lasso regression의효과에 대해서 설명해보자.
+
+
+
+```{r warning = FALSE, message = FALSE}
+# 데이터 프레임 생성
+data <- data.frame(X = X, X2 = X^2, X3 = X^3, X4 = X^4, X5 = X^5, X6 = X^6, X7 = X^7, X8 = X^8, X9 = X^9, X10 = X^10, Y = Y)
+
+# 설명 변수와 타겟 변수 분리
+X_matrix <- model.matrix(Y ~ ., data)[,-1]  # Intercept 제외한 설명변수 행렬
+Y_vector <- data$Y  # 타겟 변수 벡터
+
+# Lasso regression 모델 생성 및 Cross validation을 통한 모델 선택
+lasso_model <- glmnet(X_matrix, Y_vector, alpha = 1)
+plot(lasso_model,xvar="lambda")
+```
+```{r}
+set.seed(7)
+cv_lasso_model = cv.glmnet(X_matrix, Y_vector, alpha = 1, nfolds = 10)
+plot(cv_lasso_model)
+```
+
+```{r}
+# 최적의 lambda 값 확인
+best_lambda <- cv_lasso_model$lambda.min
+
+# 최적의 lambda 값으로 모델 재적합
+best_lasso_model <- glmnet(X_matrix, Y_vector, alpha = 1, lambda = best_lambda)
+
+# 결과 출력
+print(best_lasso_model)
+
+# 포함된 변수 확인
+included_variables <- which(coef(best_lasso_model) != 0)
+print(paste("포함된 변수:", included_variables))
+
+# 회귀 계수 확인
+coefficients <- coef(best_lasso_model)
+print("회귀 계수:")
+print(coefficients)
+
+
+# 실제 regression coefficient와 비교
+true_coefficients <- c(1, 2, -4, 3, rep(0, 6))  # 실제 regression coefficient
+estimated_coefficients <- predict(best_lasso_model, s = best_lambda, type = "coefficients")[1:11,]  # 추정된 regression coefficient
+
+
+```
+
+<br/>
+X, X2, X3, X5에 대한 계수가 0이 아닌 값을 가지고 있는 것을 확인할 수 있다. 따라서 이 변수들은 Lasso regression 모델에 포함된 변수이다.
+<br/>
+X, X2, X3 변수들과 같은 경우 추정된 계수는 실제 값과 유사하다.
+이러한 결과를 바탕으로 Lasso regression의 효과에 대해 설명해보면, Lasso regression은 변수 선택과 변수의 계수를 0으로 압축하는 효과를 갖고 있다. 따라서 불필요한 변수를 제거하고 모델을 간소화할 수 있고 선택된 변수들의 계수가 0이 아닌 경우, 그 변수들이 모델에 중요한 역할을 하는 것으로 해석할 수 있다. 이러한 희소성은 모델을 해석하기 쉽고, 과적합을 방지하여 일반화 성능을 향상시킬 수 있을 것이다.
+
+
+
+
+
+
+

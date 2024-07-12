@@ -1,0 +1,371 @@
+---
+title: "Data Analytics"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "2024-04-02"
+---
+## Assignment 2
+### Han Jiseong 
+ 20182543
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br/>
+
+ISLR 패키지의 Carseats 데이터셋은 유아용 카시트 판매회사의 400개의 상점에서의 카시트 판매량에 관한 데이
+터로 구성된다.
+
+• Sales : 각 상점에서의 판매량 (천 개)
+
+• CompPrice : 각 상점에서 경쟁회사 제품의 가격
+
+• Income : 상점이 위치한 지역의 소득 수준 ($1,000)
+
+• Advertising : 상점이 위치한 지역에서의 광고 예산 ($1,000)
+
+• Population : 상점이 위치한 지역의 인구 규모 (천 명)
+
+• Price : 각 상점에서의 카시트 가격
+
+• ShelveLoc : 각 상점에서 카시트가 좋은 위치에 진열되어 있는지 여부 (Bad, Good, and Medium)
+
+• Age : 상점이 위치한 지역 인구의 평균 연령
+
+• Education : 상점이 위치한 지역의 교육 수준
+
+• Urban: 상점이 도시에 있는지 시골에 있는지 여부 (No and Yes)
+
+• US : 상점이 미국 내에 있는지 여부 (No and Yes)
+
+다음 코드를 통해서 Carseats 데이터프레임을 사용할 수 있다.
+
+ install.packages("ISLR")
+ 
+ library(ISLR)
+ 
+ ?Carseats
+ 
+ str(Carseats)
+
+<br/>
+
+
+
+
+```{r warning = FALSE, message = FALSE}
+# 사용할 패키지 추가
+library(class)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(ISLR)
+```
+
+
+
+```{r warning = FALSE, message = FALSE}
+str(Carseats)
+```
+
+
+```{r warning = FALSE, message = FALSE}
+df = Carseats
+```
+
+```{r warning = FALSE, message = FALSE}
+# 결측치 제거
+df <- na.omit(df)
+
+#첫 100개의데이터만 사용
+df <- df[1:100,]
+```
+
+min max 정규화 함수
+<br/>
+```{r warning = FALSE, message = FALSE}
+normalize <- function(x) {
+ return ((x - min(x)) / (max(x) - min(x)))
+}
+normalize
+```
+<br/>
+특정 컬럼의 단위가 과대 혹은 과소할 경우 예측 결과에 영향을 미치기 때문에 타겟 컬럼을 제외한 나머지 컬럼은 min-max 스케일링 진행
+<br/>
+
+
+```{r warning = FALSE, message = FALSE}
+
+# 타겟 변수 제외하고 min_max 정규화
+df <- df %>%
+  select(-Sales) %>%
+  mutate_if(is.numeric, normalize) %>%
+  bind_cols(df %>% select(Sales))  # 정규화된 데이터프레임에 원래의 타겟 변수를 다시 붙임
+
+str(df)
+```
+<br/>
+
+
+
+범주형 컬럼이 존재, Label Encoding 진행
+
+```{r warning = FALSE, message = FALSE}
+# 범주형 변수 label encoding
+df$ShelveLoc <- as.integer(factor(df$ShelveLoc))
+df$Urban <- as.integer(factor(df$Urban))
+df$US <- as.integer(factor(df$US))
+```
+
+<br/>
+
+
+```{r warning = FALSE, message = FALSE}
+df
+```
+
+
+```{r warning = FALSE, message = FALSE}
+library(rsample)
+```
+
+
+문제1 : Stratified sampling을 통해 traing set과 test set을 70:30 비율로 분할하고, 두 set에서의 target 변수의 분포를 비교해보자
+
+<br/>
+```{r warning = FALSE, message = FALSE}
+# Stratified sampling을 통해 traing set과 test set을 7:3 비율로 분할
+
+set.seed(42)
+
+split <- initial_split(df, prop = 0.7, strata = "Sales")
+df_train <- training(split)
+df_test <- testing(split)
+```
+
+
+```{r warning = FALSE, message = FALSE}
+#train, test 셋에서의 타겟 변수 Sales 에 대한 분포
+
+ggplot(data = df_train, aes(x = Sales)) + geom_density() +
+  geom_density(data = df_test, aes(x = Sales), color = 'red') + theme_bw()
+```
+
+
+<br/>
+
+해당 그래프를 보았을때 train과 test 셋에서 target 변수의 분포는 유사하다고 볼 수 있다
+
+
+<br/>
+문제 2 : k-nn 을 적용한다. 이때 5-fold CV를 사용하여 parameter k의 값을 결정해 보고자한다. CV의 반복횟수
+를 1, 5, 10, 15, 20으로 점점 증가시켜 본다. 어떠한 경향을 관찰할 수 있는가? best k 값, k 값의 변화에
+따른 RMSE의 변화 그래프 등을 비교해본다. 그리고 최종적으로 best k 값을 합리적으로 결정하자.
+
+<br/>
+
+
+cv = 5일 때
+
+```{r warning = FALSE, message = FALSE}
+
+#시드 고정
+set.seed(42)
+cv <- trainControl(method="repeatedcv", number=5, repeats=5)
+tune_grid <- expand.grid(k = seq(1, 99, 2))
+
+#정규화
+z_normalized <- c("center", "scale")
+knn_cv5 <- train(data = df_train, Sales~., method="knn", trControl = cv, 
+preProcess = z_normalized, tuneGrid = tune_grid)
+
+knn_cv5
+```
+
+<br/>
+
+cv = 5 일 때, 최적의 k = 3
+
+
+
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(42)
+
+# repeats 값들 정의
+repeat_num <- c(1, 5, 10, 15, 20)
+tune_grid <- expand.grid(k = seq(1, 99, 2))
+
+# 결과 저장할 데이터 프레임 생성
+results <- data.frame(repeats = numeric(),
+                      optimal_k = numeric(),
+                      rmse = numeric())
+
+# 각 cv 값에 대해 모델 생성하고 결과 저장
+for (repeat_val in repeat_num) {
+  set.seed(42)
+  cv <- trainControl(method = "repeatedcv", number = 5, repeats = repeat_val)
+  knn_fit <- train(data = df_train, Sales ~ ., method = "knn", trControl = cv, 
+                   preProcess = z_normalized, tuneGrid = tune_grid)
+  
+  # 최적의 모델 선택
+  best_model <- knn_fit$bestTune
+  optimal_k <- best_model$k
+  
+  # RMSE 계산
+  rmse <- knn_fit$results[which.min(knn_fit$results$RMSE), "RMSE"]
+  
+  # 결과 저장
+  results <- rbind(results, data.frame(repeats = repeat_val,
+                                       optimal_k = optimal_k,
+                                       rmse = rmse))
+}
+
+# 결과 출력
+print(results)
+
+```
+
+
+5-fold CV를 10번 반복일 때 k 값에 따른 RMSE 의 변화
+```{r warning = FALSE, message = FALSE}
+#시드 고정
+set.seed(42)
+
+cv <- trainControl(method="repeatedcv", number=5, repeats=5)
+tune_grid <- expand.grid(k = seq(1, 99, 2))
+
+#정규화
+z_normalized <- c("center", "scale")
+knn_cv5 <- train(data = df_train, Sales~., method="knn", trControl = cv, 
+preProcess = z_normalized, tuneGrid = tune_grid)
+
+
+ggplot(knn_cv5) + labs(x = "k", y = "RMSE", title = "KNN",subtitle = "5-fold, 10 repeats Cross Validation") + theme_bw()
+```
+
+
+
+<br/>
+5-fold CV를 1회 반복일때 RMSE가 가장 작게 나타났다. 허나 1회 반복하는 경우 반복의 의미가 없고 해당 경우는 단지 우연이라 판단하였다.
+두번째로 RMSE가 낮았던 5-fold CV 10회 반복일때 K값에 따른 RMSE 그래프를 그려보았다. Best K는 5였으며, 그래프를 보았을때 k가 일정 수준 이상 커지면 RMSE도 증가함을 확인하였다.
+
+<br/>
+
+문제 3
+
+2번에서 k-nn 모델의 best k를 선택할 때 사용한 동일한 CV 세팅에 대해, 10개의 feature들을 모두 사
+용하는 linear regression 모델의 성능을 평가해보자. RMSE 기준으로 k-nn과 linear regression 중
+어떤 모델이 더 우수한가?
+
+<br/>
+
+cv = 10, k = 5
+
+<br/>
+
+
+
+```{r warning = FALSE, message = FALSE}
+set.seed(42)
+
+cv <- trainControl(method = "repeatedcv", number = 5, repeats = 10)
+model_lm <- train(form = Sales ~ ., data = df_train, method = "lm", trControl = cv)
+
+model_lm
+```
+<br/>
+
+
+```{r warning = FALSE, message = FALSE}
+set.seed(42)
+
+
+cv <- trainControl(method="repeatedcv", number=5, repeats=10)
+tune_grid <- expand.grid(k = 5)
+#정규화
+z_normalized <- c("center", "scale")
+model_knn <- train(data = df_train, Sales~., method="knn", trControl = cv, 
+preProcess = z_normalized, tuneGrid = tune_grid)
+
+model_knn
+
+```
+
+Linear Regression model의 RMSE가 더 낮으므로 Linear Regression 모델이 더 우수하다고 할 수 있다.
+
+<br/>
+
+
+문제4 : 두 모델 중 우수한 모델을 test set에 적용해보자. CV에서 계산된 RMSE와 test set에 대한 RMSE 값을
+비교해보자. 두 값이 충분히 유사한가? 그렇지 않은가? 결과를 분석해보자.
+
+knn 모델 예측
+```{r warning = FALSE, message = FALSE}
+carseats_knn_pred <- predict(model_knn, df_test)
+carseats_knn_pred
+```
+
+lm 모델 예측
+```{r warning = FALSE, message = FALSE}
+carseats_lm_pred <- predict(model_lm, df_test)
+carseats_lm_pred
+```
+
+
+knn 모델 예측 RMSE
+```{r warning = FALSE, message = FALSE}
+knn_rmse = sqrt(mean((carseats_knn_pred - df_test$Sales)^2))
+
+knn_rmse
+```
+
+
+lm 모델 예측 RMSE
+```{r warning = FALSE, message = FALSE}
+lm_rmse = sqrt(mean((carseats_lm_pred - df_test$Sales)^2))
+
+lm_rmse
+```
+
+
+
+
+RMSE 값 자체가 표본 평균과의 차이를 나타내기 때문에 특별한 가정 없이 정규성을 따르는 경우가 많으므로 t-test 사용
+
+
+```{r}
+# 두 RMSE 값의 차이
+diff_rmse <- knn_rmse - lm_rmse
+
+# 두 RMSE 값의 차이에 대한 표준 오차
+standard_error <- sqrt((knn_rmse^2 / 2) + (lm_rmse^2 / 2))
+
+# t-검정을 통한 두 RMSE 값의 차이의 유의성 검정
+t_value <- diff_rmse / standard_error
+df <- min(length(df_test$Sales) - 1, length(carseats_knn_pred) - 1, length(carseats_lm_pred) - 1) # 자유도
+p_value <- 2 * pt(abs(t_value), df = df, lower.tail = FALSE) # 양측 검정
+
+# 결과 출력
+cat("두 RMSE 값의 차이:", diff_rmse, "\n")
+cat("표준 오차:", standard_error, "\n")
+cat("t-value:", t_value, "\n")
+cat("p-value:", p_value, "\n")
+
+# 유의수준 0.05로 가정하고 검정 결과 출력
+if (p_value < 0.05) {
+  cat("두 RMSE 값의 차이는 통계적으로 유의합니다.\n")
+} else {
+  cat("두 RMSE 값의 차이는 통계적으로 유의하지 않습니다.\n")
+}
+
+```
+p_value가 0.05 보다 크므로 두 RMSE 값의 차이는 통계적으로 유의하지 않음
+
+전체데이터에서 100개만을 추출해 사용해서 두 모델의 차이가 적게 나왔다고 생각한다. 또한 임의로 추출한 100개가 전체 데이터셋을 대표할 수 있다는 근거가 부족하기에 두 모델에 대한 신뢰성을 확보하기에는 어렵다. knn모델 사용시 범주형 변수를 수치형으로 변환해서 사용하는 것은 순서 혹은 간격에 의미가 없는 범주에 임의로 숫자를 배정한 것이므로 모델에 좋지 않은 영향을 미친다. 따라서 데이터 셋이 커지면 커질 수록 두 모델의 성능 차이는 더욱 명확하게 나타날 것이라 생각된다. 또한 회귀 모델일때 다중공선성을 고려하는 경우가 일반적인데 해당 프로젝트는 다중공선성을 고려하지 않았다. 다중공선성을 고려한다면 결과가 달라질 수도 있을 것이라 생각된다.

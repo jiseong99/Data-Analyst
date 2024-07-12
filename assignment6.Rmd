@@ -1,0 +1,895 @@
+---
+title: "과제6 2차"
+author: "Student"
+date: "2024-06-02"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Sentiment Analysis on Twitter Dataset
+
+“Tweets.csv” 파일은 트위터에서 미국의 6개 항공사(American, Delta,
+SouthWest, United, US Airways, Virgin America)를 언급하는 tweet
+14,640개에 대한 정보를 수집한 데이터셋으로, 본 과제에서는 다음 두 변수를
+활용한다.
+
+-   airline_sentiment: “positive”, “negative”, “neutral”
+-   text: tweet 텍스트 변수 airline_sentiment는 각 tweet 텍스트가
+    항공사에 대한 긍정적인 내용인지, 부정적인 내용인지, 중립적인
+    내용인지에 따라 positive, negative, neutral로 분류한 결과를
+    나타낸다. 본 과제에서는 tweet 텍스트로부터 positive/negative/neutral
+    여부를 판별하기 위한 모델을 만들어본다.
+
+## 1. 데이터 분석 및 시각화
+
+```{r}
+# 필요한 패키지 로드
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(e1071)
+library(nnet)
+library(rsample)
+library(glmnet)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+# 데이터 읽기
+tweets <- read.csv("Tweets.csv", stringsAsFactors = FALSE)
+
+# 데이터 구조 확인
+str(tweets)
+# 데이터 불러오기
+
+# sentiment 분포 시각화
+ggplot(tweets, aes(x = airline_sentiment)) + 
+  geom_bar(fill = "skyblue") + 
+  theme_minimal() +
+  labs(title = "Sentiment Distribution", x = "Sentiment", y = "Count")
+```
+
+```{r message=FALSE}
+# 시각화
+ggplot(tweets, aes(x=airline, fill=airline_sentiment)) +
+  geom_bar(position="dodge") +
+  theme_bw() +
+  labs(title="항공사 별 airline sentiment 분포", x="항공사", y="count", fill="airline sentiment") +
+  theme_minimal()
+
+```
+
+[결과]
+
+전반적으로 모든 항공사가 negative 내용이 많다. 또한, negative, neutral,
+positive 순으로 내용이 많은 것도 일치한다.
+
+```{r message=FALSE}
+# 항공사별 총 트윗 수 계산
+total_tweets <- tweets %>%
+  count(airline) %>%
+  rename(total_count = n)
+
+# 항공사별 감정 비율 계산
+sentiment_distribution <- tweets %>%
+  count(airline, airline_sentiment) %>%
+  group_by(airline) %>%
+  mutate(percentage = n / sum(n)) %>%
+  ungroup()
+
+# 시각화 - 항공사별 총 트윗 수
+ggplot(total_tweets, aes(x = reorder(airline, -total_count), y = total_count, fill = airline)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Tweets by Airline",
+       x = "Airline",
+       y = "Total Count",
+       fill = "Airline") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# 시각화 - 항공사별 감정 비율
+ggplot(sentiment_distribution, aes(x = airline, y = percentage, fill = airline_sentiment)) +
+  geom_bar(stat = "identity", position = "fill") +
+  labs(title = "Sentiment Proportion by Airline",
+       x = "Airline",
+       y = "Proportion",
+       fill = "Sentiment") +
+  theme_minimal()
+
+```
+
+[결과]
+
+\* 각 항공사별 트윗의 수를 보면 United, US Airways, American,
+Southewest, Detta, Virgin America순으로 관심을 받고 있음을 알 수 있다.\
+\* 그 안에서의 비율을 보면, Virgin America는 관심은 덜 받지만 부정적인
+내용의 비율은 적다. US Airways는 가장 많은 관심을 받으나 그만큼 부정적인
+내용의 비율이 가장 크다.
+
+```{r message=FALSE}
+# positive/negative/neutral 분리
+positive <- subset(tweets, airline_sentiment == "positive")
+negative <- subset(tweets, airline_sentiment == "negative")
+neutral <- subset(tweets, airline_sentiment == "neutral")
+
+# 긍정적 감정 워드 클라우드 생성
+wordcloud(positive$text, max.words=50, random.order=FALSE, colors=brewer.pal(8, "Dark2"))
+```
+
+```{r message=FALSE}
+
+# 중립적 감정 워드 클라우드 생성
+wordcloud(neutral$text, max.words=50, random.order=FALSE, colors=brewer.pal(8, "Dark2"))
+
+```
+
+```{r message=FALSE}
+
+# 부정적 감정 워드 클라우드 생성
+wordcloud(negative$text, max.words=50, random.order=FALSE, colors=brewer.pal(8, "Dark2"))
+```
+
+[결과]
+
+\* positive : thanks, southwestair, jetblue, united, thank 등의 단어들이
+많이 보인다.\
+\* neutral : united, jetblue, southwestair, americanair 등의 단어들이
+많이 보인다.\
+\* negative : united, flight americanair, usairways 등의 단어들이 많이
+보인다.
+
+당연하게도 positive는 긍정적인 단어들이, negative는 부정적인 단어들이
+다수 포함되어 있다. 또한 전체적으로 항공사의 이름이 많이 언급된다. 특히,
+jetblue가 비교대상으로 많이 언급되는 것 같다.
+
+## 2. 텍스트 데이터 전처리
+
+```{r message=FALSE}
+# target 변수를 factor로 변환
+tweets$airline_sentiment <- factor(tweets$airline_sentiment)
+
+# positive/negative/neutral 분포 확인
+table(tweets$airline_sentiment)
+```
+
+```{r}
+
+tweets_corpus <- VCorpus(VectorSource(tweets$text))
+
+# 대소문자 통합
+tweets_corpus_clean <- tm_map(tweets_corpus, content_transformer(tolower))
+# 숫자 제거
+tweets_corpus_clean <- tm_map(tweets_corpus_clean, removeNumbers)
+# 불용어(stopwords) 제거
+tweets_corpus_clean <- tm_map(tweets_corpus_clean, removeWords, stopwords())
+# 문장부호(punctuation) 제거
+tweets_corpus_clean <- tm_map(tweets_corpus_clean, removePunctuation)
+# 어간 추출(stemming)
+tweets_corpus_clean <- tm_map(tweets_corpus_clean, stemDocument)
+# 공백 제거
+tweets_corpus_clean <- tm_map(tweets_corpus_clean, stripWhitespace)
+
+# Document-Term Matrix (DTM) 생성
+tweets_dtm <- DocumentTermMatrix(tweets_corpus_clean)
+tweets_dtm
+```
+
+```{r}
+tweets_tfidf <- weightTfIdf(tweets_dtm)
+tweets_tfidf
+
+```
+
+```{r message=FALSE}
+# 예시 문장
+example_sentence <- tweets_corpus[[100]]$content
+
+# 원본 문장 출력
+print(paste("Original sentence:", example_sentence))
+
+# 1. 대소문자 통합
+lowercase_sentence <- tolower(example_sentence)
+print(paste("Lowercase sentence:", lowercase_sentence))
+
+# 2. 숫자 제거
+no_numbers_sentence <- removeNumbers(lowercase_sentence)
+print(paste("No numbers sentence:", no_numbers_sentence))
+
+# 3. 불용어 제거
+no_stopwords_sentence <- removeWords(no_numbers_sentence, stopwords("en"))
+print(paste("No stopwords sentence:", no_stopwords_sentence))
+
+# 4. 문장부호 제거
+no_punctuation_sentence <- removePunctuation(no_stopwords_sentence)
+print(paste("No punctuation sentence:", no_punctuation_sentence))
+
+# 5. 공백 제거
+no_whitespace_sentence <- stripWhitespace(no_punctuation_sentence)
+print(paste("No extra whitespace sentence:", no_whitespace_sentence))
+
+# 6. 어간 추출
+stemmed_sentence <- wordStem(unlist(strsplit(no_whitespace_sentence, " ")), language = "en")
+stemmed_sentence <- paste(stemmed_sentence, collapse = " ")
+print(paste("Stemmed sentence:", stemmed_sentence))
+
+#단어 수 비교
+original_word_count <- length(unlist(strsplit(example_sentence, " ")))
+print(paste("Original word count:", original_word_count))
+final_word_count <- length(unlist(strsplit(stemmed_sentence, " ")))
+print(paste("Final word count:", final_word_count))
+```
+
+[결과]
+
+전처리가 잘 되는지 확인하기 위해 100번째 text를 살펴본다.
+
+```{r message=FALSE}
+# 100번 이상 발생하는 단어 출력
+findFreqTerms(tweets_dtm, lowfreq = 100)
+
+# 발생 빈도가 매우 적은 단어 제거
+tweets_dtm <- removeSparseTerms(tweets_dtm, 0.995)
+tweets_tfidf <- removeSparseTerms(tweets_tfidf, 0.995)
+print(tweets_dtm)
+print(tweets_tfidf)
+```
+
+[결과]
+
+\* 대소문자 통합: 모든 텍스트를 소문자로 변환하여 단어의 일관성을
+유지했습니다.
+
+\* 숫자 제거: 숫자는 의미를 전달하지 않기 때문에 제거했습니다.
+
+\* 불용어 제거: 'the', 'is', 'in' 등의 자주 사용되지만 의미가 없는
+단어를 제거했습니다.
+
+\* 문장부호 제거: 구두점, 마침표 등을 제거하여 단어의 순수한 형태만
+남겼습니다.
+
+\* 어간 추출: 단어의 어간을 추출하여 기본 형태로 변환했습니다. 예를
+들어, 'running'은 'run'으로 변환되었습니다.
+
+\* 공백 제거: 연속된 공백을 단일 공백으로 변환하여 텍스트의 가독성을
+높였습니다.
+
+## 3. 데이터 분할 및 모델링
+
+### 3. 데이터 분할
+
+```{r}
+# 데이터 분할
+set.seed(123)
+train_indices <- 1:5000
+train_set <- tweets[train_indices, ]
+test_set <- tweets[-train_indices, ]
+
+# Train set을 다시 Train과 Validation set으로 분할
+
+# DTM을 데이터 프레임으로 변환
+df_dtm <- as.data.frame(as.matrix(tweets_dtm[1:5000, ]))
+df_dtm$airline_sentiment <- train_set$airline_sentiment
+set.seed(123)
+split_dtm <- initial_split(df_dtm, prop = 0.8, strata = "airline_sentiment")
+dtm_train <- training(split_dtm)
+dtm_validation <- testing(split_dtm)
+
+# TF-IDF를 데이터 프레임으로 변환
+df_tfidf <- as.data.frame(as.matrix(tweets_tfidf[1:5000, ]))
+df_tfidf$airline_sentiment <- train_set$airline_sentiment
+set.seed(123)
+split_tfidf <- initial_split(df_tfidf, prop = 0.8, strata = "airline_sentiment")
+tfidf_train <- training(split_tfidf)
+tfidf_validation <- testing(split_tfidf)
+
+
+
+# 각 데이터 세트의 클래스 분포 시각화
+train_dist <- as.data.frame(table(dtm_train$airline_sentiment))
+validation_dist <- as.data.frame(table(dtm_validation$airline_sentiment))
+test_dist <- as.data.frame(table(test_set$airline_sentiment))
+
+# Test set을 데이터 프레임으로 변환
+test_dtm <- as.data.frame(as.matrix(tweets_dtm[-train_indices, ]))
+test_dtm$airline_sentiment <- tweets$airline_sentiment[-train_indices]
+
+test_tfidf <- as.data.frame(as.matrix(tweets_tfidf[-train_indices, ]))
+test_tfidf$airline_sentiment <- tweets$airline_sentiment[-train_indices]
+
+# 시각화를 위해 데이터 결합
+train_dist$set <- 'Train'
+validation_dist$set <- 'Validation'
+test_dist$set <- 'Test'
+dist_data <- rbind(train_dist, validation_dist, test_dist)
+
+# 클래스 분포 시각화
+ggplot(dist_data, aes(x = Var1, y = Freq, fill = set)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Class Distribution in Train, Validation, and Test Sets",
+       x = "Sentiment",
+       y = "Count") +
+  theme_minimal()
+
+
+```
+
+## 3.A
+
+지금까지 학습한 모델을 최대한 활용해보고, 분석 과정과 결과를 report하자.
+사용하는 모델, 모델에 포함 되는 파라미터에 대한 튜닝, 모델에 포함되는
+feature의 수, DTM/TF-IDF 사용 여부 등이 classification accuracy에 영향을
+미칠 수 있다.\
+[주의: 모델을 수립할 때에는 test set을 사용하여 성능을 비교할 수 없다.
+모델 간의 성능 비교를 위해서는 training set 중 일부를 validation set으로
+활용하자.]
+
+### Naive Bayes 모델
+
+```{r}
+# Naive Bayes 모델 (DTM)
+nb_model_dtm <- naiveBayes(as.matrix(dtm_train[ , -ncol(dtm_train)]), dtm_train$airline_sentiment)
+nb_pred_dtm <- predict(nb_model_dtm, as.matrix(dtm_validation[ , -ncol(dtm_validation)]))
+nb_pred_dtm <- factor(nb_pred_dtm, levels = levels(dtm_validation$airline_sentiment))
+
+# 성능 평가 (DTM)
+nb_cm_dtm <- confusionMatrix(nb_pred_dtm, dtm_validation$airline_sentiment)
+print(nb_cm_dtm)
+
+# Naive Bayes 모델 (TF-IDF)
+nb_model_tfidf <- naiveBayes(as.matrix(tfidf_train[ , -ncol(tfidf_train)]), tfidf_train$airline_sentiment)
+nb_pred_tfidf <- predict(nb_model_tfidf, as.matrix(tfidf_validation[ , -ncol(tfidf_validation)]))
+nb_pred_tfidf <- factor(nb_pred_tfidf, levels = levels(tfidf_validation$airline_sentiment))
+
+# 성능 평가 (TF-IDF)
+nb_cm_tfidf <- confusionMatrix(nb_pred_tfidf, tfidf_validation$airline_sentiment)
+print(nb_cm_tfidf)
+```
+
+[결과]
+
+정확도가 낮은 이유는 여러 가지가 있을 수 있다. Naive Bayes 모델은 매우
+단순한 확률 모델로, 데이터의 구조나 특징에 따라 성능이 크게 달라질 수
+있다. 특히, TF-IDF를 사용한 Naive Bayes 모델은 종종 성능이 낮아지는
+경향이 있다. 적합한 모델은 아닌듯 하다.
+
+### Logistic Regression 모델
+
+```{r}
+# Logistic Regression 모델 (DTM)
+lr_model_dtm <- multinom(airline_sentiment ~ ., data = dtm_train)
+lr_pred_dtm <- predict(lr_model_dtm, dtm_validation)
+
+# 성능 평가 (DTM)
+lr_cm_dtm <- confusionMatrix(lr_pred_dtm, dtm_validation$airline_sentiment)
+print(lr_cm_dtm)
+
+# Logistic Regression 모델 (TF-IDF)
+lr_model_tfidf <- multinom(airline_sentiment ~ ., data = tfidf_train)
+lr_pred_tfidf <- predict(lr_model_tfidf, tfidf_validation)
+
+# 성능 평가 (TF-IDF)
+lr_cm_tfidf <- confusionMatrix(lr_pred_tfidf, tfidf_validation$airline_sentiment)
+print(lr_cm_tfidf)
+```
+
+[결과]
+
+TF-IDF를 사용한 Logistic Regression 모델이 DTM을 사용한 모델보다
+전반적으로 더 높은 accuracy와 Kappa 값을 나타낸다. 특히, Negative
+클래스에서의 Balanced Accuracy가 더 높다.
+
+따라서, Logistic Regression 모델 중에서는 TF-IDF를 사용한 모델이 더 나은
+성능을 보여주므로 최적의 모델로 선택하는 것이 합리적이다.
+
+### Lasso Regression 모델
+
+```{r}
+# Logistic Regression 모델 (Lasso Regression) (DTM)
+x_train_dtm <- as.matrix(dtm_train[ , -ncol(dtm_train)])
+y_train_dtm <- dtm_train$airline_sentiment
+
+x_validation_dtm <- as.matrix(dtm_validation[ , -ncol(dtm_validation)])
+y_validation_dtm <- dtm_validation$airline_sentiment
+
+# Cross-Validation을 사용한 Lasso Regression
+set.seed(123)
+cv_lasso_dtm <- cv.glmnet(x = x_train_dtm, y = y_train_dtm, alpha = 1, family = "multinomial", type.measure = "class", nfolds = 10)
+plot(cv_lasso_dtm)
+
+lasso_pred_dtm <- predict(cv_lasso_dtm, s = cv_lasso_dtm$lambda.1se, newx = x_validation_dtm, type = "class")
+
+# 성능 평가 (DTM)
+lasso_cm_dtm <- confusionMatrix(factor(lasso_pred_dtm, levels = levels(y_validation_dtm)), y_validation_dtm)
+print(lasso_cm_dtm)
+
+# Logistic Regression 모델 (Lasso Regression) (TF-IDF)
+x_train_tfidf <- as.matrix(tfidf_train[ , -ncol(tfidf_train)])
+y_train_tfidf <- tfidf_train$airline_sentiment
+
+x_validation_tfidf <- as.matrix(tfidf_validation[ , -ncol(tfidf_validation)])
+y_validation_tfidf <- tfidf_validation$airline_sentiment
+
+# Cross-Validation을 사용한 Lasso Regression
+set.seed(123)
+cv_lasso_tfidf <- cv.glmnet(x = x_train_tfidf, y = y_train_tfidf, alpha = 1, family = "multinomial", type.measure = "class", nfolds = 10)
+plot(cv_lasso_tfidf)
+
+lasso_pred_tfidf <- predict(cv_lasso_tfidf, s = cv_lasso_tfidf$lambda.1se, newx = x_validation_tfidf, type = "class")
+
+# 성능 평가 (TF-IDF)
+lasso_cm_tfidf <- confusionMatrix(factor(lasso_pred_tfidf, levels = levels(y_validation_tfidf)), y_validation_tfidf)
+print(lasso_cm_tfidf)
+
+```
+
+[결과]
+
+Lasso Regression (TF-IDF) 모델은 Logistic Regression (TF-IDF) 모델보다
+약간 더 높은 accuracy와 Kappa 값을 나타낸다. 특히 Negative 클래스와
+Neutral 클래스에서의 Balanced Accuracy가 더 높다. Positive 클래스에서는
+Logistic Regression (TF-IDF)가 약간 더 나은 성능을 보인다.
+
+따라서, 종합적으로 Lasso Regression (TF-IDF) 모델이 Logistic Regression
+(TF-IDF) 모델보다 전반적으로 더 나은 성능을 보이므로 최적의 모델로
+선택하는 것이 합리적이다.
+
+### KNN
+
+```{r message=FALSE}
+# 필요한 패키지 로드
+library(class)
+
+# 타겟 변수를 팩터로 변환
+dtm_train$airline_sentiment <- as.factor(dtm_train$airline_sentiment)
+dtm_validation$airline_sentiment <- as.factor(dtm_validation$airline_sentiment)
+
+# k 값 튜닝
+tune_grid_knn <- expand.grid(k = seq(1, 20, by = 1))
+train_control <- trainControl(method = "cv", number = 10)
+
+knn_tuned_model_dtm <- train(
+  airline_sentiment ~ ., 
+  data = dtm_train, 
+  method = "knn", 
+  tuneGrid = tune_grid_knn, 
+  trControl = train_control
+)
+
+# 최적의 모델 확인
+print(knn_tuned_model_dtm)
+best_knn_model_dtm <- knn_tuned_model_dtm$finalModel
+
+# 예측 및 성능 평가
+knn_pred_dtm <- predict(knn_tuned_model_dtm, newdata = dtm_validation)
+knn_pred_dtm <- factor(knn_pred_dtm, levels = levels(dtm_validation$airline_sentiment))
+knn_cm_dtm <- confusionMatrix(knn_pred_dtm, dtm_validation$airline_sentiment)
+print(knn_cm_dtm)
+
+```
+
+[결과]
+
+k-Nearest Neighbors (kNN) 모델은 Negative 클래스에서 비교적 좋은 성능을
+보였으나, Neutral 및 Positive 클래스에서는 성능이 떨어지는 모습을
+보인다. 이는 모델이 Negative 클래스를 잘 예측하지만, Neutral 및 Positive
+클래스에서는 오차가 많음을 나타낸다.
+
+```{r message=FALSE}
+# 타겟 변수를 팩터로 변환
+tfidf_train$airline_sentiment <- as.factor(tfidf_train$airline_sentiment)
+tfidf_validation$airline_sentiment <- as.factor(tfidf_validation$airline_sentiment)
+
+# k 값 튜닝
+tune_grid_knn_tfidf <- expand.grid(k = seq(1, 20, by = 1))
+train_control <- trainControl(method = "cv", number = 10)
+
+knn_tuned_model_tfidf <- train(
+  airline_sentiment ~ ., 
+  data = tfidf_train, 
+  method = "knn", 
+  tuneGrid = tune_grid_knn_tfidf, 
+  trControl = train_control
+)
+
+# 최적의 모델 확인
+print(knn_tuned_model_tfidf)
+best_knn_model_tfidf <- knn_tuned_model_tfidf$finalModel
+
+# 예측 및 성능 평가
+knn_pred_tfidf <- predict(knn_tuned_model_tfidf, newdata = tfidf_validation)
+knn_pred_tfidf <- factor(knn_pred_tfidf, levels = levels(tfidf_validation$airline_sentiment))
+knn_cm_tfidf <- confusionMatrix(knn_pred_tfidf, tfidf_validation$airline_sentiment)
+print(knn_cm_tfidf)
+
+```
+
+[결과]
+
+종합적으로 보면, kNN (DTM) 모델이 kNN (TF-IDF) 모델보다 더 나은 성능을
+보이는 것으로 보인다. 특히, Accuracy와 Kappa 값을 고려할 때 kNN (DTM)
+모델이 더 적합한 모델로 보이나 현재까지는 정확도와 Kappa 값을 기준으로
+Lasso Regression (TF-IDF) 모델이 가장 적합한것으로 보인다.
+
+### Decision Tree 모델
+
+```{r}
+# Decision Tree 모델 (DTM)
+set.seed(123)
+dt_model_dtm <- rpart(airline_sentiment ~ ., data = dtm_train, method = "class", control = list(cp = 0))
+
+# 가지치기 위한 최적의 cp 값 찾기
+printcp(dt_model_dtm)
+best_cp <- dt_model_dtm$cptable[which.min(dt_model_dtm$cptable[,"xerror"]), "CP"]
+
+# Pruning the tree
+pruned_dt_model_dtm <- prune(dt_model_dtm, cp = best_cp)
+
+# 예측
+dt_pred_dtm <- predict(pruned_dt_model_dtm, newdata = dtm_validation, type = "class")
+
+# 성능 평가
+dt_cm_dtm <- confusionMatrix(factor(dt_pred_dtm), factor(dtm_validation$airline_sentiment))
+print(dt_cm_dtm)
+
+# 시각화
+rpart.plot(pruned_dt_model_dtm)
+
+```
+
+[결과]
+
+Classification Tree (DTM) 모델은 Negative 클래스에서 높은 성능을
+보였으나, Neutral 클래스에서 성능이 매우 낮다. Positive 클래스에서는
+중간 수준의 성능을 보인다.
+
+```{r message=FALSE}
+# Decision Tree 모델 (TF-IDF)
+set.seed(123)
+dt_model_tfidf <- rpart(airline_sentiment ~ ., data = tfidf_train, method = "class", control = list(cp = 0))
+
+# 가지치기 위한 최적의 cp 값 찾기
+printcp(dt_model_tfidf)
+best_cp_tfidf <- dt_model_tfidf$cptable[which.min(dt_model_tfidf$cptable[,"xerror"]), "CP"]
+
+# Pruning the tree
+pruned_dt_model_tfidf <- prune(dt_model_tfidf, cp = best_cp_tfidf)
+
+# 예측
+dt_pred_tfidf <- predict(pruned_dt_model_tfidf, newdata = tfidf_validation, type = "class")
+
+# 성능 평가
+dt_cm_tfidf <- confusionMatrix(factor(dt_pred_tfidf), factor(tfidf_validation$airline_sentiment))
+print(dt_cm_tfidf)
+
+# 시각화
+rpart.plot(pruned_dt_model_tfidf)
+
+```
+
+[결과]
+
+종합적으로 보면, Classification Tree (TF-IDF) 모델이 Classification Tree
+(DTM) 모델보다 전반적으로 더 나은 성능을 보인다. 특히, Accuracy와 Kappa
+값을 고려할 때 TF-IDF 기반의 모델이 더 적합한 모델로 보이나 아직까지도
+Lasso Regression (TF-IDF) 모델이 가장 좋아보인다.
+
+### Random Forest 모델
+
+```{r}
+# 데이터 프레임의 열 이름 확인 및 수정
+colnames(dtm_train) <- make.names(colnames(dtm_train))
+colnames(dtm_validation) <- make.names(colnames(dtm_validation))
+
+# 타겟 변수를 팩터로 변환
+dtm_train$airline_sentiment <- as.factor(dtm_train$airline_sentiment)
+dtm_validation$airline_sentiment <- as.factor(dtm_validation$airline_sentiment)
+
+# Random Forest 모델 (DTM)
+set.seed(123)
+rf_model_dtm <- randomForest(airline_sentiment ~ ., data = dtm_train, ntree = 500, mtry = sqrt(ncol(dtm_train) - 1))
+
+# 예측
+rf_pred_dtm <- predict(rf_model_dtm, newdata = dtm_validation)
+rf_pred_dtm <- factor(rf_pred_dtm, levels = levels(dtm_validation$airline_sentiment))
+
+# 성능 평가
+rf_cm_dtm <- confusionMatrix(rf_pred_dtm, dtm_validation$airline_sentiment)
+print(rf_cm_dtm)
+
+```
+
+[결과]
+
+Random Forest (DTM) 모델은 Negative 클래스에서 높은 성능을 보였으나,
+Neutral 클래스에서 성능이 낮다. Positive 클래스에서는 중간 수준의 성능을
+보인다.
+
+```{r message=FALSE}
+# Random Forest 모델 (TF-IDF)
+colnames(tfidf_train) <- make.names(colnames(tfidf_train))
+colnames(tfidf_validation) <- make.names(colnames(tfidf_validation))
+tfidf_train$airline_sentiment <- as.factor(tfidf_train$airline_sentiment)
+tfidf_validation$airline_sentiment <- as.factor(tfidf_validation$airline_sentiment)
+set.seed(123)
+rf_model_tfidf <- randomForest(airline_sentiment ~ ., data = tfidf_train, ntree = 500, mtry = sqrt(ncol(tfidf_train) - 1))
+rf_pred_tfidf <- predict(rf_model_tfidf, newdata = tfidf_validation)
+rf_pred_tfidf <- factor(rf_pred_tfidf, levels = levels(tfidf_validation$airline_sentiment))
+rf_cm_tfidf <- confusionMatrix(rf_pred_tfidf, tfidf_validation$airline_sentiment)
+print(rf_cm_tfidf)
+```
+
+[결과]
+
+종합적으로 보면, Random Forest (DTM) 모델이 Random Forest (TF-IDF)
+모델보다 전반적으로 더 나은 성능을 보인다. 특히, Accuracy와 Kappa 값을
+고려할 때 DTM 기반의 모델이 더 적합한 모델로 보인다. Random Forest (DTM)
+모델이 현재까지 가장 높은 성능을 보였습니다. (Neutral: 0.34434 (낮음)이
+우려되긴 한다.)
+
+### SVM 모델 (RBF 커널)
+
+```{r message=FALSE}
+# SVM 모델 (DTM)
+#set.seed(123)
+#x_train_dtm <- dtm_train[, -ncol(dtm_train)]
+#y_train_dtm <- dtm_train$airline_sentiment
+#x_validation_dtm <- dtm_validation[, -ncol(dtm_validation)]
+#y_validation_dtm <- dtm_validation$airline_sentiment
+
+# 튜닝 가능한 매개변수 그리드 설정
+#tune_grid <- expand.grid(C = 2^(2:6), sigma = 2^(-6:-2))
+
+#train_control <- trainControl(method = "cv", number = 10)
+
+# 모델 학습
+#set.seed(123)
+#rbf_svm_dtm <- train(
+#  x_train_dtm, y_train_dtm,
+#  method = "svmRadial",
+#  trControl = train_control,
+#  tuneGrid = tune_grid,
+#  preProcess = c("center", "scale")
+#)
+
+# 예측
+#rbf_pred_dtm <- predict(rbf_svm_dtm, newdata = x_validation_dtm)
+#rbf_pred_dtm <- factor(rbf_pred_dtm, levels = levels(y_validation_dtm))
+
+# 성능 평가 (DTM)
+#rbf_cm_dtm <- confusionMatrix(rbf_pred_dtm, y_validation_dtm)
+#print(rbf_cm_dtm)
+
+```
+
+[결과]
+
+RBF-SVM (DTM) 모델은 Negative 클래스에서 높은 성능을 보였으나, Neutral
+클래스와 Positive 클래스에서 성능이 낮다. 특히 Neutral 클래스의 성능이
+매우 낮다.
+
+```{r message=FALSE}
+# SVM 모델 (TF-IDF)
+#set.seed(123)
+#x_train_tfidf <- tfidf_train[, -ncol(tfidf_train)]
+#y_train_tfidf <- tfidf_train$airline_sentiment
+#x_validation_tfidf <- tfidf_validation[, -ncol(tfidf_validation)]
+#y_validation_tfidf <- tfidf_validation$airline_sentiment
+
+# 상수 피처 제거
+#x_train_tfidf <- x_train_tfidf[, sapply(x_train_tfidf, function(x) length(unique(x)) > 1)]
+#x_validation_tfidf <- x_validation_tfidf[, colnames(x_train_tfidf)]
+
+# 모델 학습
+#set.seed(123)
+#rbf_svm_tfidf <- train(
+#  x_train_tfidf, y_train_tfidf,
+#  method = "svmRadial",
+#  trControl = train_control,
+#  tuneGrid = tune_grid,
+#  preProcess = c("center", "scale")
+#)
+
+# 예측
+#rbf_pred_tfidf <- predict(rbf_svm_tfidf, newdata = x_validation_tfidf)
+#rbf_pred_tfidf <- factor(rbf_pred_tfidf, levels = levels(y_validation_tfidf))
+
+# 성능 평가 (TF-IDF)
+#rbf_cm_tfidf <- confusionMatrix(rbf_pred_tfidf, y_validation_tfidf)
+#print(rbf_cm_tfidf)
+
+```
+
+[결과]
+
+RBF-SVM (TF-IDF) 모델은 Negative 클래스에서 높은 성능을 보였으나,
+Neutral 클래스와 Positive 클래스에서 성능이 낮다. 특히 Neutral 클래스의
+성능이 매우 낮다. 종합적으로 보면, RBF-SVM (DTM) 모델이 RBF-SVM (TF-IDF)
+모델보다 전반적으로 더 나은 성능을 보이나 랜덤포레스트를 이기지 못했다.
+
+#### SVM 모델 같은 경우 최초 실행은 성공하였으나 렌더링 무한 대기로 html 제출파일에는 포함하지 않았다.
+
+### Gradient Boosting
+
+```{r message=FALSE}
+library(gbm)
+library(smotefamily)
+
+# GBM 모델 하이퍼파라미터 튜닝 (DTM)
+set.seed(123)
+train_control <- trainControl(method = "cv", number = 5)
+
+tune_grid <- expand.grid(
+  n.trees = c(50, 100, 150),
+  interaction.depth = c(1, 3, 5),
+  shrinkage = c(0.01, 0.1),
+  n.minobsinnode = c(10, 20)
+)
+
+set.seed(123)
+gbm_model_dtm_tuned <- train(
+  airline_sentiment ~ ., data = dtm_train,
+  method = "gbm",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  verbose = FALSE
+)
+
+# 최적의 모델로 예측
+gbm_pred_dtm_tuned <- predict(gbm_model_dtm_tuned, newdata = dtm_validation)
+
+# 성능 평가 (DTM)
+gbm_cm_dtm_tuned <- confusionMatrix(gbm_pred_dtm_tuned, dtm_validation$airline_sentiment)
+print(gbm_cm_dtm_tuned)
+
+
+```
+
+[결과]
+
+Gradient Boosting (DTM) 모델은 Negative 클래스에서 높은 성능을 보였으나,
+Neutral 클래스에서 성능이 매우 낮다.
+
+```{r message=FALSE}
+# GBM 모델 하이퍼파라미터 튜닝 (TF-IDF)
+set.seed(123)
+train_control <- trainControl(method = "cv", number = 5)
+
+tune_grid <- expand.grid(
+  n.trees = c(50, 100, 150),
+  interaction.depth = c(1, 3, 5),
+  shrinkage = c(0.01, 0.1),
+  n.minobsinnode = c(10, 20)
+)
+
+set.seed(123)
+gbm_model_tfidf_tuned <- train(
+  airline_sentiment ~ ., data = tfidf_train,
+  method = "gbm",
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  verbose = FALSE
+)
+
+# 최적의 모델로 예측
+gbm_pred_tfidf_tuned <- predict(gbm_model_tfidf_tuned, newdata = tfidf_validation)
+
+# 성능 평가 (TF-IDF)
+gbm_cm_tfidf_tuned <- confusionMatrix(gbm_pred_tfidf_tuned, tfidf_validation$airline_sentiment)
+print(gbm_cm_tfidf_tuned)
+
+```
+
+[결과]
+
+종합적으로 보면, Gradient Boosting (TF-IDF) 모델이 Gradient Boosting
+(DTM) 모델보다 전반적으로 더 나은 성능을 보인다. 특히, Accuracy와 Kappa
+값을 고려할 때 TF-IDF 기반의 모델이 더 적합한 모델로 보인다. Gradient
+Boosting (TF-IDF) 모델이 가장 높은 성능을 보인다. 따라서, 최종적으로
+Gradient Boosting (TF-IDF) 모델을 최적의 모델로 선택할 수 있다.
+
+#### [3.A 종합 결과]
+
+\* DTM은 각 문서에서 단어의 등장 횟수를 나타내는 행렬이다. 행렬의 행은
+문서, 열은 단어를 나타내며, 각 원소는 해당 문서에서 특정 단어가 등장한
+횟수를 나타낸다. \* TF-IDF는 단어의 빈도와 문서의 중요도를 함께 고려한
+가중치 행렬이다. TF는 단어 빈도를 나타내고, IDF는 단어의 분포를
+나타낸다. IDF는 특정 단어가 모든 문서에 공통적으로 등장하면 그 단어의
+중요도를 낮추는 역할을 한다.
+
+-\> DTM은 단순하고 직관적이며, TF-IDF는 더 정교한 단어 중요도를
+반영한다.
+
+이러한 특성에 따라 모델들의 성능이 DTM과 TF-IDF별로 다르게 나온다.
+
+TF-IDF가 더 나은 경우: Logistic Regression, Lasso Regression, Decision
+Tree, Gradient Boosting 모델에서 TF-IDF가 DTM보다 더 나은 성능을 보인다.
+이는 TF-IDF가 중요한 단어에 더 높은 가중치를 부여하여 모델이 더 중요한
+특징을 학습할 수 있도록 도와주기 때문이다.
+
+DTM이 더 나은 경우: k-NN, Random Forest, RBF-SVM 모델에서 DTM이
+TF-IDF보다 더 나은 성능을 보인다. 이는 DTM의 단순 빈도 기반 특성이 거리
+기반 모델(k-NN)이나 다양한 트리 기반 모델(Random Forest, RBF-SVM)에서 더
+안정적인 학습을 가능하게 하기 때문이다.
+
+모델과 데이터 특성에 따라 DTM과 TF-IDF의 적합성이 다르다. 선형 모델이나
+중요 단어 가중치가 중요한 모델에서는 TF-IDF가 더 유리하며, 비선형
+모델이나 거리 기반 모델에서는 DTM이 더 유리할 수 있다. 최적의 모델을
+선택할 때는 데이터 특성과 모델 특성을 고려하여 결정해야 한다.
+
+최종 선택 : **Gradient Boosting (TF-IDF)**
+
+## 3.B
+
+최종적으로 선택한 모델은 무엇이며 test set에 대한 accuracy는 얼마인가?
+
+```{r message=FALSE}
+# 열 이름 표준화
+colnames(tfidf_train) <- make.names(colnames(tfidf_train))
+colnames(tfidf_validation) <- make.names(colnames(tfidf_validation))
+colnames(test_tfidf) <- make.names(colnames(test_tfidf))
+
+# 최적의 모델로 test set에 대한 예측
+test_pred_tfidf_tuned <- predict(gbm_model_tfidf_tuned, newdata = test_tfidf)
+
+# 예측 결과를 factor로 변환하여 Confusion Matrix 계산
+test_pred_tfidf_tuned <- factor(test_pred_tfidf_tuned, levels = levels(test_tfidf$airline_sentiment))
+test_cm_tfidf_tuned <- confusionMatrix(test_pred_tfidf_tuned, test_tfidf$airline_sentiment)
+
+# 성능 평가 결과 출력
+print(test_cm_tfidf_tuned)
+
+# Accuracy 출력
+test_accuracy <- test_cm_tfidf_tuned$overall['Accuracy']
+print(paste("Test Set Accuracy:", test_accuracy))
+
+```
+
+[결과]
+
+Accuracy: 전체 정확도가 **71%**로, 이는 상당히 좋은 성능을 나타낸다.
+대부분의 예측이 정확했다.
+
+Class별 성능: Negative 클래스에서 가장 높은 민감도와 정밀도를 보였으며,
+이는 negative 클래스를 잘 예측했음을 의미한다. Neutral 클래스에서 성능이
+상대적으로 낮았다. 이는 중립적인 감정을 예측하는 것이 더 어려웠음을
+나타낸다. Positive 클래스에서도 적당히 높은 성능을 보인다.
+
+전반적으로 **Gradient Boosting 모델(TF-IDF)**은 좋은 성능을 보인다. 특히
+negative 클래스에서 매우 높은 성능을 보이며, 이는 데이터셋에서 가장 큰
+비중을 차지하는 클래스이기 때문일 수 있다. neutral 클래스에 대한 성능이
+낮은 것은 개선이 가능할 수 있다.
+
+## 3.C
+
+세 class (positive, negative, neutral) 중에서 어떤 class를 분류하기
+어려운가?
+
+|                         | Negative | Neutral | Positive |
+|-------------------------|----------|---------|----------|
+| Sensitivity (재현율)    | 0.8434   | 0.3619  | 0.6471   |
+| Specificity             | 0.5844   | 0.9013  | 0.9315   |
+| Pos Pred Value (정밀도) | 0.7736   | 0.4963  | 0.6442   |
+| Neg Pred Value          | 0.6891   | 0.8401  | 0.9323   |
+
+-   Negative : Sensitivity와 Precision 모두 높은 편으로 해당 클래스를 잘
+    예측하고 있다.
+
+-   Neutral : Sensitivity, Pos Pred Value 모두 낮아 예측에 어려움이
+    있다.
+
+-   Positive : Sensitivity와 Precision 모두 중간으로 안정적인 예측을
+    한다.
+
+    모델의 confusion maatrix 출력 과정에서 우려했던 것처럼 Neutral의
+    예측이 가장 어려웠다.
+
+    **Neutral**에 대한 예측 성능을 개선하기 위해 추가적인 피처
+    엔지니어링, 데이터 불균형 처리, 또는 모델링 기법을 개선할 필요가
+    있다. 리서치 결과, 데이터셋 자체의 클래스 불균형이 있기 때문에 이를
+    완화하기 위해 더 복잡한 모델을 사용해야 한다고 한다. SMOTE와
+    오버샘플링 등의 기법도 있다고 한다.

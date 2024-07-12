@@ -1,0 +1,289 @@
+---
+title: "Assignment #5"
+subtitle: "Data Analysis with Applications"
+author: "JiSeong Han"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    highlight: pygments
+  pdf_document: default
+---
+
+<br/>
+
+### Handwritten Digit Recognition
+<br/>
+
+MNIST 데이터셋은 image classification model의 성능을 평가하는 데 주로 활용되는 데이터셋으로, 아래 예와 같이 손으로 쓰여진 숫자들의 이미지 70,000개로 구성되어 있다. 이 중에서 60,000개는 training set으로 활용 되며 10,000개는 test set으로 활용된다. 각 데이터는 28 * 28 = 784개의 픽셀의 명암을 0~255 사이의 값으로 표현한 784개의 feature와 0~9 사이의 숫자로 표현되는 target을 포함한다. 본 과제에서는 tree를 활용하여 숫자를 분류하기 위한 classification model을 만들어본다.
+
+<br/>
+
+
+```{r message=FALSE}
+# 라이브러리 추가 
+library(caret)
+library(dslabs)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+<br/>
+
+#### 1. 아래의 순서에 따라 data preprocessing을 수행하자.
+
+**A. dslabs 패키지를 설치하고, 다음 코드를 실행하면 mnist 변수에 아래 설명과 같이 데이터가 저장된다.**
+
+```{r 1A}
+# 1A. mnist 데이터 읽기
+mnist <- read_mnist()
+```
+
+**B. Training set의 데이터 사이즈가 매우 크기 때문에 60,000개의 데이터 중에 처음 2,000개만 사용하자. 이때 feature 데이터는 변수 train_x에 저장하고, target 데이터는 변수 train_y에 저장한다. train_y의 분포를 확인해 보자.**
+
+```{r 1B}
+# 1B. training set에서 첫 2000개의 데이터 추출
+train_x <- mnist$train$image[1:2000,]
+train_y <- factor(mnist$train$labels[1:2000])
+
+# label 분포 확인
+table(train_y)
+
+# 시각화
+ggplot(as.data.frame(train_y), aes(x=train_y)) + geom_bar() + labs(x="labels")
+```
+
+* 0 ~ 9 값을 가지는 label의 개수가 172 ~ 224개까지 범위를 가지기 때문에 label별로 조금 차이는 있으나 분석에는 크게 무리가 없을 것으로 판단된다. 
+
+<br/>
+
+**C. train_x의 column의 이름을 V1, V2, V3 … 순서대로 설정하자. colnames() 함수를 사용한다.** 
+
+```{r 1C}
+# 1C. train_x의 변수 이름 세팅
+colnames(train_x) <- paste0("V", 1:ncol(train_x))
+```
+
+**D. 784개의 픽셀 중에서 숫자와 관련없는 가장자리 부분과 같은 경우는 많은 데이터들에 대해서 같은 색을 가진다. 이러한 픽셀은 숫자를 분류하는 데 크게 영향을 미치지 않으므로 feature에서 제외시키는 것이 합리적이다. caret 패키지의 nearZeroVar(train_x) 함수를 실행하면 train_x의 column들 중에서 variance가 0이거나 0에 가까운 것들의 index를 얻을 수 있다. 이 index에 해당하는 column을 train_x에서 제외시키자. 784개의 feature 중에서 몇개가 제외되었는가?**  
+
+```{r 1D}
+# 1D. variance가 0에 가까운 feature 제외
+nzv <- nearZeroVar(train_x)
+length(nzv)
+train_x <- train_x[, -nzv]
+```
+
+* 784개의 픽셀 중에서 540개가 feature에서 제외되었다. 
+<br/>
+
+**E. 최종적으로 train_x와 train_y를 합쳐서 train이라는 이름의 데이터프레임을 만들자.**  
+
+```{r 1E}
+# 1E. training set data frame 생성
+train <- data.frame(train_x, y = train_y)
+```
+
+**F. C~E의 과정을 test set에 대해서 동일하게 수행하여 test라는 이름의 데이터프레임을 만들자. 이때 D에서 제외한 feature와 동일한 feature들을 test set에서도 제외시켜야 한다.** 
+
+```{r 1F}
+# 1F. test set data frame 생성
+test_x <- mnist$test$images
+test_y <- mnist$test$labels
+colnames(test_x) <- paste0("V", 1:ncol(test_x))
+test_x <- test_x[, -nzv]
+test <- data.frame(test_x, y = test_y)
+```
+
+<br/>
+
+#### 2. 아래의 코드는 test set의 첫번째 데이터를 화면에 이미지로 출력해준다. 이를 활용하여 test set의 image 행렬의 행 번호를 입력받아 숫자 이미지를 출력하는 함수 print_image()를 만들어보자. 이 함수를 활용하여 9, 19, 42번째 숫자를 이미지로 출력해보고 실제 label 값과 비교해보자.
+
+```{r 2A}
+# 2. 이미지 출력 함수 작성
+print_image <- function(num){image(1:28, 1:28, matrix(mnist$test$images[num,], nrow=28)[ , 28:1], col = gray(seq(0, 1, 0.05)), xlab = "", ylab="")}
+
+# 이미지와 실제 label 비교 
+print_image(9)
+print_image(19)
+print_image(42)
+test_y[9]
+test_y[19]
+test_y[42]
+```
+
+* 9, 12, 42 번째 숫자들을 출력해 본 결과, 눈으로 구분하는 데는 무리가 없으나 5는 6과 비슷하고, 3은 8과 비슷하기 때문에 모델에 의한 구분이 쉽지는 않을 것으로 예상된다. 
+
+<br/>
+
+
+#### Decision tree를 만들어보자.
+
+<br/>
+
+##### A.rpart() 함수의 default 옵션으로 Tree를 만든 후 cross validation을 활용한 pruning 과정을 수행해보자.
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(123)
+
+tree = rpart(y~.,data=train,method="class")
+rpart.plot(tree)
+```
+<br/>
+
+
+```{r}
+# cross validation의 결과 출력
+printcp(tree)
+```
+
+```{r}
+# cross validation의 결과를 시각화
+plotcp(tree)
+```
+
+<br/>
+
+```{r}
+# cv error가 가장 낮을 떄, cp값 저장
+best_cp=tree$cptable[which.min(tree$cptable[,"xerror"]),"CP"] 
+
+best_cp
+```
+
+```{r}
+# best cp 값일 때, pruned tree 생성 및 시각화
+best_rt = prune(tree, cp = best_cp)
+rpart.plot(best_rt)
+```
+
+<br/>
+
+CV 예측오차를 최소화하는 best cp = 0.01이다.
+
+##### B. Pruning을 통해 얻은 Tree의 Test set에 대한 정확도는 얼마인가?
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+# test set에 대한 예측 수행 및 confusion matrix 계산
+pred_class=predict(best_rt, newdata = test,type="class")
+confusionMatrix(factor(pred_class),factor(test$y))
+```
+
+<br/>
+
+Test Set에 대한 예측 정확도는 59.06% 이다.
+
+<br/>
+
+##### C. randomForest() 함수를 사용하여 bagging model을 만들어보자. mtry를 제외한 옵션은 모두 default 값을 사용한다.
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(123)
+
+# bagging model
+bag=randomForest(y~.,data=train,mtry=ncol(train)-1)
+plot(bag)
+```
+
+<br/>
+
+class들이 약 20 이전에는 급격히 감소하다가 약 40 이후 부터는 일정한 수준을 나타내고 있다.
+
+<br/>
+
+##### D. Bagging model의 Test set에 대한 정확도는 얼마인가? B번의 Tree model에 비해서 성능이 얼마나 향상되었는가?
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+# test set에 대한 예측 수행 및 confusion matrix 계산
+pred_bag=predict(bag,newdata=test,type="class")
+confusionMatrix(factor(pred_bag),factor(test$y))
+```
+
+<br/>
+
+Bagging model의 test set에 대한 정확도는 89.65%로 tree model에 비해 약 30.59% 증가하였다.
+
+<br/>
+
+##### E. randomForest() 함수의 default 옵션을 사용하여 random forest model을 만들어보자. 그리고 Bagging과 random forest 모델의 Tree의 수의 증가에 따른 OOB classification error rate의 변화를 하나의 그래프에 그려보고 두 모델의 성능을 비교해보자.
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(123)
+
+# random Forest 모델 생성
+rf=randomForest(y~.,data=train)
+
+# OOB classification Error rate 시각화
+plot(bag$err.rate[,1],type='l',col="red",ylim=c(0.05,0.35),xlab="number of trees",ylab="Error",main="Bagging and Random forest")
+lines(rf$err.rate[,1],type='l',col="blue")
+legend("topright",c("Bag","Random forest"),cex=0.9,col=c("red","blue"),lty=1)
+```
+
+<br/>
+
+두 모델이 비슷하게 감소하다가 약 30-40 이후부터 tree의 수가 증가함에 따라 random Forest 모델의 Error Rate가 더 낮은 것을 확인할 수 있다.
+
+<br/>
+
+##### F. Random forest model의 Test set에 대한 예측 정확도는 얼마인가? Bagging model에 비해서 성능이 얼마나 향상되었는가?
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+# test set에 대한 예측 수행 및 confusion matrix 계산 
+pred_rf=predict(rf,newdata=test,type="class")
+confusionMatrix(factor(pred_rf),factor(test$y))
+```
+
+
+Random forest model은 91.48%의 예측 정확도가 나왔고, Bagging model에 비해 예측 정확도가 약 1.83% 증가하였다.
+
+<br/>
+
+##### G. Random forest model의 결과로부터, 분류가 가장 정확한 숫자는 몇인가? 가장 분류가 어려운 숫자는 몇인가?
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+cm=confusionMatrix(factor(pred_rf),factor(test$y))
+
+# Balanced Accuracy에 해당하는 값들만 따로 추출
+Accuracy=data.frame(cm$byClass[,11])
+Accuracy
+```
+
+숫자 2가 0.9883343의 Accuracy로 가장 정확하게 분류가 되며, 가장 분류가 어려운 숫자는 숫자 8로 0.9246267의 가장 낮은 Accuracy를 보였다.
+<br/>
+
+##### H. 실제 값은 7지만 Random forest model에 의해 1로 예측되는 test data를 찾아 이미지를 몇 개 출력해보자. 눈으로 확인했을 때 7와 1의 구별이 어려운가?
+
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+# 실제 값이 7이고 예측값이 1인 데이터 저장
+data=subset(test,test$y==7 & pred_rf==1)
+
+# 조건에 해당하는 이미지 번호 추출
+rownames(data)
+```
+
+```{r}
+# 이미지
+numbers <- c(552, 1261, 1501, 1717, 2064, 3226, 3581, 3839, 3977, 4298, 4887, 4967)
+
+# 반복문으로 각 숫자에 대해 print_image 함수 호출
+for (number in numbers) {
+  print_image(number)
+}
+```
+
+개인적으로 이미지들을 확인하였을 때, 1261, 1717, 3581, 4298, 4887 이미지 같은 경우 1인지 7인지 구분하기 모호하다고 판한하였다.

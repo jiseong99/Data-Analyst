@@ -1,0 +1,259 @@
+---
+title: "Data Analytics"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "2024-03-21"
+---
+## Assignment 1
+### Han Jiseong 
+### 20182543
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+• monthly_air_quality_seoul.csv : 서울시 구별 월평균 대기질 측정값
+
+• station_coord.csv : 서울시 구별 대기질 측정소 좌표 (위도, 경도)
+
+위의 데이터파일은 서울시의 구별 월평균 대기질 측정값과 대기질 측정소의 좌표를 가지고 있습니다. 강의노트, 실
+습, 작년과제를 참고하여 데이터의 특성을 보여줄 수 있도록 적절한 시각화를 수행해 보세요. 이때 데이터파일을 R
+에서 읽어오기 전에 미리 수정하지 않습니다. 즉, R에서 위의 데이터파일을 읽은 후, 각 시각화에 적합한 형태로 데
+이터프레임을 생성하거나 수정하도록 합니다. 
+
+• 서로 다른 형태의 네 가지 그래프를 활용한다. 
+
+• 지도를 한 번 이상 활용한다.
+
+• 시각화 결과를 적절히 분석한다. 
+
+
+
+
+```{r}
+# 사용할 패키지 추가
+library(ggplot2)
+library(tidyverse)
+library(tmaptools)
+library(ggmap)
+library(dplyr)
+library(mapview)
+library(sf)
+```
+
+
+
+```{r}
+# 데이터파일 읽기
+air_df = read.csv("monthly_air_quality_seoul.csv", fileEncoding = "euc-kr")
+str(air_df)
+```
+
+```{r}
+# 데이터 파일 읽기
+station_df = read.csv("station_coord.csv", fileEncoding = "euc-kr")
+str(station_df)
+```
+
+
+
+```{r}
+# "측정소명"을 기준으로 air_df와 station_df을 left join
+merged_df <- left_join(air_df, station_df, by = c("측정소명" = "측정소명"))
+```
+
+```{r}
+str(merged_df)
+```
+
+```{r}
+# 동작구의 작년 한 해 미세먼지
+data1 <- subset(merged_df, 측정월 >= "202301" & 측정월 <= "202312" & 측정소명 == "동작구")
+data1
+```
+
+```{r, echo=TRUE}
+
+data1$측정월 <- as.character(data1$측정월)
+
+labels <- c("23-01", "23-02", "23-03", "23-04", "23-05", "23-06", 
+            "23-07", "23-08", "23-09", "23-10", "23-11", "23-12")
+
+# 동작구 월별 미세먼지에 관한 그래프 그리기
+ggplot(data1, aes(x = 측정월, y = 미세먼지, fill = 측정소명)) +
+  geom_bar(stat="identity", position="dodge") +
+  labs(title = "23년 동작구 월별 미세먼지량", x = "측정월", y = "미세먼지 농도") +
+  scale_x_discrete(labels = labels) +
+  theme_minimal()
+
+```
+```{r}
+labels <- c("23-01", "23-02", "23-03", "23-04", "23-05", "23-06", 
+            "23-07", "23-08", "23-09", "23-10", "23-11", "23-12")
+
+# 동작구 월별 초미세먼지에 관한 그래프 그리기
+ggplot(data1, aes(x = 측정월, y = 초미세먼지, fill = 측정소명)) +
+  geom_bar(stat="identity", position="dodge") +
+  labs(title = "23년 동작구 월별 초미세먼지량", x = "측정월", y = "초미세먼지 농도") +
+  scale_x_discrete(labels = labels) +
+  theme_minimal()
+```
+
+```{r}
+labels <- c("202301", "202302", "202303", "202304", "202305", "202306", 
+            "202307", "202308", "202309", "202310", "202311", "202312")
+
+# 동작구 월별 미세먼지와 초미세먼지에 관한 그래프 그리기
+ggplot(data1, aes(x = 측정월)) +
+  geom_bar(aes(y = 미세먼지, fill = "미세먼지"), stat="identity", position="dodge") +
+  geom_bar(aes(y = 초미세먼지, fill = "초미세먼지"), stat="identity", position="dodge") +
+  labs(title = "동작구 월별 미세먼지 및 초미세먼지 농도", x = "측정월", y = "농도") +
+  scale_x_discrete(labels = labels) +
+  scale_fill_manual(values = c("미세먼지" = "skyblue", "초미세먼지" = "blue")) +
+  theme_minimal()
+```
+<br/>
+- 동작구 작년 한 해 1~4월 미세먼지, 초미세먼지 농도가 높은것을 확인 할 수 있다.
+<br/>
+
+```{r}
+merged_df
+```
+
+```{r}
+# 연도별 미세먼지 및 초미세먼지 평균 계산하여 새로운 데이터프레임에 저장
+result_df <- merged_df %>%
+  mutate(Year = as.integer(substr(측정월, 1, 4))) %>%
+  filter(측정소명 == "동작구" & Year >= 2014 & Year <= 2023) %>%
+  group_by(Year) %>%
+  summarize(미세먼지_평균 = mean(미세먼지), 초미세먼지_평균 = mean(초미세먼지))
+
+result_df
+```
+```{r}
+# 꺾은선 그래프 그리기
+ggplot() +
+  geom_line(data = result_df, aes(x =  Year, y = 미세먼지_평균, color = "미세먼지 평균")) +
+  geom_line(data = result_df, aes(x = Year, y = 초미세먼지_평균, color = "초미세먼지 평균")) +
+  labs(x = "Year", y = "평균 미세먼지 량", color = "Dust Type") +
+  scale_color_manual(values = c("미세먼지 평균" = "blue", "초미세먼지 평균" = "red")) +
+  theme_minimal()
+```
+<br/>
+- 동작구의 미세먼지 / 초 미세먼지는 해마다 점점 줄어드는 추세이다
+<br/>
+
+```{r}
+# 측정월이 202301부터 202312까지의 데이터 추출
+filtered_df <- merged_df %>%
+  filter(측정월 >= 202301 & 측정월 <= 202312)
+filtered_df
+```
+```{r}
+# 측정소별 평균 계산 및 소수점 2째자리까지 반올림
+average_by_station <- filtered_df %>%
+  group_by(측정소명) %>%
+  summarize(
+    평균_미세먼지 = round(mean(미세먼지), 2),
+    평균_초미세먼지 = round(mean(초미세먼지), 2)
+  )
+
+# 결과 출력
+average_by_station
+```
+```{r}
+ggplot(average_by_station,aes(x=reorder(측정소명,평균_미세먼지),y=평균_미세먼지)) +
+  geom_bar(stat="identity",fill="indianred3",color="black") + theme_minimal() + coord_flip() +
+  labs(title="23년 구 별 미세먼지량", y = "23년 평균 미세먼지량", x = "구") +
+  geom_text(aes(label=평균_미세먼지),hjust=-0.25)
+```
+```{r}
+ggplot(average_by_station,aes(x=reorder(측정소명,평균_초미세먼지),y=평균_초미세먼지)) +
+  geom_bar(stat="identity",fill="indianred3",color="black") + theme_minimal() + coord_flip() +
+  labs(title="23년 구 별 초미세먼지량", y = "23년 평균 초미세먼지량", x = "구") +
+  geom_text(aes(label=평균_초미세먼지),hjust=-0.25)
+```
+```{r}
+# 미세먼지와 초미세먼지를 하나의 데이터프레임으로 결합
+combined_df <- rbind(
+  data.frame(지역=average_by_station$측정소명, 미세먼지량=average_by_station$평균_미세먼지, 종류="미세먼지"),
+  data.frame(지역=average_by_station$측정소명, 미세먼지량=average_by_station$평균_초미세먼지, 종류="초미세먼지")
+)
+
+# 그래프 그리기
+ggplot(combined_df, aes(x=reorder(지역, 미세먼지량), y=미세먼지량, fill=종류)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme_minimal() +
+  coord_flip() +
+  labs(title="23년 구 별 미세먼지 및 초미세먼지량", y="평균 농도", x="구") +
+  geom_text(aes(label=미세먼지량), hjust=-0.25, position=position_dodge(width=0.9))
+
+```
+<br/>
+- 미세먼지량와 초미세먼지량의 상관관계는 없다고 판단됨
+- 미세먼지량과 초미세먼지량을 보았을때 종합적으로 도봉구의 공기가 가장 청정하다고 판단됨
+<br/>
+
+```{r}
+merged_df <- left_join(average_by_station, station_df, by = c("측정소명" = "측정소명"))
+merged_df
+```
+
+
+
+```{r}
+ggplot(merged_df, aes(x = longitude, y = latitude, size = 평균_미세먼지)) +
+  geom_point() +
+  scale_size_continuous(range = c(2, 10)) +  # 점의 크기 범위 설정
+  labs(title = "미세먼지량에 따른 지도 시각화", x = "경도", y = "위도", size = "평균 미세먼지") +
+  theme_minimal()
+
+```
+
+<br/>
+-위도 경도를 지도를 사용하지 않고 좌표평면위에 시각화
+<br/>
+
+```{r}
+# 만약 "평균_미세먼지" 열이 문자열 형식으로 되어 있다면 숫자로 변환
+merged_df$평균_미세먼지 <- as.numeric(merged_df$평균_미세먼지)
+
+# sf 데이터프레임으로 변환
+merged_sf <- st_as_sf(merged_df, coords = c("longitude", "latitude"), crs = 4326)
+
+# mapview를 사용하여 시각화 (size 매개변수를 '평균_미세먼지' 열에 매핑, 크기를 50배로 조절)
+mapview(merged_sf, zcol = "평균_미세먼지", color = 'blue',  size = 50)
+```
+
+<br/>
+- 미세먼지량에 따라 색상의 정도를 다르게 한 지도 시각화 / 가독성이 나빠 크기로 변경
+<br/>
+
+
+
+```{r}
+locate =  c(left=min(merged_df$longitude)-0.05, right=max(merged_df$longitude)+0.05, bottom=min(merged_df$latitude)-0.02, top=max(merged_df$latitude)+0.02)
+```
+
+
+
+```{r}
+#지도 불러오기
+register_stadiamaps("772f48ad-30f5-4b4e-8b53-61f998956ff3", write = FALSE)
+map <- get_stadiamap(locate, zoom=12)
+```
+
+```{r}
+#구별 평균 미세먼지 량
+ggmap(map, base_layer = ggplot(merged_df, aes(x=longitude, y=latitude, size=평균_미세먼지, alpha = 평균_미세먼지))) + geom_point(color="blue") + theme_void() + labs(title="구별 평균 미세먼지 수준", alpha="평균_미세먼지", size="평균_미세먼지") + theme(text= element_text(size=20))
+```
+
+```{r}
+#구별 평균 초미세먼지 량
+ggmap(map, base_layer = ggplot(merged_df, aes(x=longitude, y=latitude, size=평균_초미세먼지, alpha = 평균_초미세먼지))) + geom_point(color="red") + theme_void() + labs(title="구별 평균 초미세먼지 수준", alpha="평균_초미세먼지", size="평균_초미세먼지") + theme(text= element_text(size=20))
+```
+

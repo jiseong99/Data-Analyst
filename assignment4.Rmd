@@ -1,0 +1,654 @@
+---
+title: "Data Analytics"
+output:
+  html_document:
+    highlight: pygments
+    df_print: paged
+  pdf_document: default
+date: "2024-05-10"
+---
+## Assignment 4
+### Han Jiseong 
+ 20182543
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br/>
+
+### 가석방 위반자 예측
+
+
+교도소의 수감자들이 일정 기간 수감 후 심사를 거쳐 정해진 형기를 채우지 않고 석방되는 것을 가석방이라 한다.가석방된 수감자는 남은 형기를 교도소 밖에서 보내지만, 가석방 기간 중 다시 범죄를 저지르는 등 가석방의 조건을 위반하는 경우 다시 교도소로 돌아오기도 한다.
+
+parole_violator.csv는 2010년 미국에서 가석방된 수감자 중 교도소 복역 기간이 6개월 이하이며 범죄로 인한 총 형량이 18개월 이하인 사람들에 대한 다음 데이터를 포함한다.
+
+• Male : 성별 (1:남성, 0:여성)
+
+• RaceWhite : 인종(1:백인, 0:백인 외)
+
+• Age : 수감자의 가석방 시의 나이
+
+• State : 수감자의 state (Kentucky, Louisiana, Virginia, Other)
+
+• TimeServed : 수감 기간 (단위: 개월)
+
+• MaxSentence : 수감자의 형량 (단위: 개월)
+
+• MultipleOffenses : 중복 범죄 여부 (1: 여러 범죄로 수감, 0: 하나의 범죄로 수감)
+
+• Crime: 범죄 유형 (Larceny-절도, Drugs-마약, Driving-음주운전, Other-기타)
+
+• Violator : 가석방 조건 위반 여부 (1:가석방 중 조건 위반, 0: 위반 없이 가석방 기간 종료)
+
+위의 수감자의 정보를 활용하여, 수감자가 가석방된 후 가석방 조건을 위반하는지 여부를 예측하는 모델을 수립하고자 한다.
+
+```{r warning = FALSE, message = FALSE}
+# 사용할 패키지 추가
+library(mice)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(visdat)
+library(psych)
+library(rsample)
+library(caret)
+library(glmnet)
+library(ROCR)
+library(e1071)
+```
+
+
+
+
+
+<br/>
+데이터셋에 결측치가 있는지 확인한다. 시각화를 통해 어떠한 변수에 어느 정도의 결측치가 있는지 확인해보고, imputation 과정을 통해 결측치를 적절한 값으로 대체시킨다. 간단하게 다음과 같이 micepackage를 활용하자.
+<br/>
+
+데이터 불러오기
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+
+df = read.csv("parole_violator.csv")
+str(df)
+```
+
+<br/>
+male, racewhite, state, multioffenses, crime, violator 컬럼은 범주형으로 변환
+<br/>
+```{r warning = FALSE, message = FALSE}
+# 범주형으로 변환해야할 컬럼들 factor 로 변환
+df$Male <- factor(df$Male)
+df$RaceWhite <- factor(df$RaceWhite)
+df$State <- factor(df$State)
+df$MultipleOffenses <- factor(df$MultipleOffenses)
+df$Crime <- factor(df$Crime)
+df$Violator <- factor(df$Violator)
+
+str(df)
+```
+
+
+```{r warning = FALSE, message = FALSE}
+# 데이터프레임에서 결측치 개수 계산
+missing_counts <- sapply(df, function(x) sum(is.na(x)))
+
+# 결측치 개수를 데이터프레임으로 변환
+missing_df <- data.frame(column_name = names(missing_counts), missing_count = missing_counts)
+
+# 히스토그램 그리기
+ggplot(missing_df, aes(x = column_name, y = missing_count)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Column Name", y = "Missing Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # x 축 레이블 각도 설정
+
+```
+<br/>
+TimeServed 컬럼에만 결측치가 존재하는 것을 확인했으며, 약 60개 정도의 결측치가 존재한다는 것을 확인할 수 있음
+<br/>
+
+```{r warning = FALSE, message = FALSE}
+set.seed(123)
+
+df_imp <- complete(mice(df))
+str(df_imp)
+```
+
+```{r warning = FALSE, message = FALSE}
+# 데이터프레임에서 결측치 개수 계산
+missing_counts_imp <- sapply(df_imp, function(x) sum(is.na(x)))
+
+# 결측치 개수를 데이터프레임으로 변환
+missing_df_imp <- data.frame(column_name = names(missing_counts_imp), missing_count = missing_counts_imp)
+
+# 히스토그램 그리기
+ggplot(missing_df_imp, aes(x = column_name, y = missing_count)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Column Name", y = "Missing Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # x 축 레이블 각도 설정
+
+```
+```{r}
+sum(is.na(df_imp))
+```
+
+
+<br/>
+
+결측치 보간이 제대로 이루어졌음을 확인할 수 있음
+
+<br/>
+
+그래프를 활용하여 데이터셋을 시각화해보고, 이로부터 변수들의 특성을 분석해보자.
+
+```{r}
+str(df_imp)
+```
+
+```{r}
+# "Age", "TimeServed", "MaxSentence"에 대한 boxplot 그리기
+ggplot(df_imp, aes(x = 1, y = Age)) +
+  geom_boxplot() +
+  labs(x = "", y = "Age") +
+  ggtitle("Boxplot of Age")
+
+ggplot(df_imp, aes(x = 1, y = TimeServed)) +
+  geom_boxplot() +
+  labs(x = "", y = "TimeServed") +
+  ggtitle("Boxplot of TimeServed")
+
+ggplot(df_imp, aes(x = 1, y = MaxSentence)) +
+  geom_boxplot() +
+  labs(x = "", y = "MaxSentence") +
+  ggtitle("Boxplot of MaxSentence")
+```
+<br/>
+연속형 변수들에 대해서 boxplot을 그렸고 MaxSentence에 이상치가 존재함을 확인하였다.
+<br/>
+
+```{r}
+pairs.panels(df_imp[c("Age", "TimeServed", "MaxSentence")])
+
+
+```
+<br/>
+연속형 변수들 간의 상관관계를 그래프로 그려, 변수들 간의 약한 양의 상관관계가 존재함을 확인하였다.
+변수들간의 상관관계가 낮아 다중공선성의 증거가 되지 않는다 판단, 연속형 변수들 사이의 다중공선성을 배제하였다.
+<br/>
+
+
+```{r}
+# 'Male' 컬럼의 빈도수를 계산합니다.
+male_freq <- table(df_imp$Male)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+male_freq_df <- as.data.frame(male_freq)
+names(male_freq_df) <- c("Male", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(male_freq_df, aes(x = Male, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of Male", x = "Male", y = "Frequency")
+```
+```{r}
+# 'RaceWhite' 컬럼의 빈도수를 계산합니다.
+RaceWhite_freq <- table(df_imp$RaceWhite)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+RaceWhite_freq_df <- as.data.frame(RaceWhite_freq)
+names(RaceWhite_freq_df) <- c("RaceWhite", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(RaceWhite_freq_df, aes(x = RaceWhite, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of RaceWhite", x = "RaceWhite", y = "Frequency")
+
+```
+
+```{r}
+# 'State' 컬럼의 빈도수를 계산합니다.
+State_freq <- table(df_imp$State)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+State_freq_df <- as.data.frame(State_freq)
+names(State_freq_df) <- c("State", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(State_freq_df, aes(x = State, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of State", x = "State", y = "Frequency")
+
+
+```
+
+
+```{r}
+# 'MultipleOffenses' 컬럼의 빈도수를 계산합니다.
+MultipleOffenses_freq <- table(df_imp$MultipleOffenses)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+MultipleOffenses_freq_df <- as.data.frame(MultipleOffenses_freq)
+names(MultipleOffenses_freq_df) <- c("MultipleOffenses", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(MultipleOffenses_freq_df, aes(x = MultipleOffenses, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of MultipleOffenses", x = "MultipleOffenses", y = "Frequency")
+
+```
+```{r}
+# 'Crime' 컬럼의 빈도수를 계산합니다.
+Crime_freq <- table(df_imp$Crime)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+Crime_freq_df <- as.data.frame(Crime_freq)
+names(Crime_freq_df) <- c("Crime", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(Crime_freq_df, aes(x = Crime, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of Crime", x = "Crime", y = "Frequency")
+
+```
+```{r}
+# 'Violator' 컬럼의 빈도수를 계산합니다.
+Violator_freq <- table(df_imp$Violator)
+
+# 빈도수를 데이터프레임으로 변환합니다.
+Violator_freq_df <- as.data.frame(Violator_freq)
+names(Violator_freq_df) <- c("Violator", "Frequency")
+
+# 히스토그램을 그립니다.
+ggplot(Violator_freq_df, aes(x = Violator, y = Frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Frequency of Violator", x = "Violator", y = "Frequency")
+
+```
+
+<br/>
+범주형 컬럼들의 데이터 분포를 히스토그램으로 그려보았을 때 Male, State, Frequency, Violator 컬럼의 클래스 불균형이 심하다는 것을 확인할 수 있다.
+<br/>
+
+
+Stratified sampling을 통해 traing set과 test set을 70:30 비율로 분할한다. 그리고 training set을 활용하여 가석방 조건 위반 여부(Violator)를 예측하기 위한 logistic regression model을 수립하자. 이때 모든 feature 변수를 모델에 포함시킨다.
+
+<br/>
+
+```{r}
+# Stratified sampling을 통해 traing set과 test set을 7:3 비율로 분할
+
+set.seed(123)
+
+split <- initial_split(df_imp, prop = 0.7, strata = "Violator")
+df_train <- training(split)
+df_test <- testing(split)
+
+ggplot(df_train, aes(x = Violator)) + geom_density(color="darkred") +
+geom_density(data = df_test, aes(x = Violator), color="darkblue") +
+theme_bw()
+```
+
+
+
+```{r}
+#logistic regression model을 수립 , 모든 feature를 포함
+model <-glm(Violator~. , family = "binomial" , data = df_train )
+summary(model)
+```
+<br/>
+
+a) Logistic regression의 결과를 분석해보자.
+
+<br/>
+
+AIC 값은 모델의 적합도와 모델의 복잡성을 모두 고려하므로 AIC 값이 작을수록 더 좋은 모델이다. 주어진 데이터에 대한 해당 모델의 적합도와 모델의 복잡성을 고려할 때, AIC 값이 255.05인 것은 비교적 적합도가 높으면서도 간단한 모델을 의미하므로 모델이 데이터를 잘 학습하였다고 볼 수 있다.
+
+RaceWhite1, StateVirginia, MultipleOffenses1 컬럼은은 p-value가 유의수준인 0.05보다 작으므로, 유의미한 변수들이라 할 수 있다.
+Male1, Age, StateLouisiana, StateOther, TimeServed, MaxSentence, CrimeDrugs, CrimeLarceny, CrimeOther
+컬럼은은 p-value가 유의수준인 0.05보다 크므로, 유의미하지 않은 변수들이라 할 수 있다.  
+
+Null deviance와 Residual deviance는 각각 모델이 종속 변수를 얼마나 잘 설명하는지를 나타내는 척도이다. Residual deviance가 더 작은 모델이 더 좋은 적합도를 보인다. 해당 모델의 Residual deviance는 229.05로, Null deviance에 비해 낮은 값으로 데이터를 잘 설명하는 것이라 할 수 있다.
+
+<br/>
+
+b) Logistic regression의 결과로부터, 중복 범죄로 인한 수감자의 가석방 조건 위반 확률에 대해 어떠한 해석을 할 수 있는가?
+
+<br/>
+
+중복 범죄(MultipleOffenses) 변수의 계수는 1.781361로 나타난다. 이는 중복 범죄자가 가석방 조건을 위반할 로그 오즈의 증가를 나타낸다. 여기서 로그 오즈가 양수인 경우, 해당 변수의 값이 증가할수록 가석방 조건 위반의 가능성이 더 높아진다는 것을 의미한니다. 해당 모델에서 중복 범죄자는 가석방 조건 위반이 더 자주 발생할 가능성이 있다.
+
+<br/>
+
+c) Logistic regression의 결과로부터, Louisiana state의 수감자의 가석방 조건 위반 확률에 대해 어떠한 해석
+을 할 수 있는가?
+
+<br/>
+
+'StateLouisiana'의 계수는 0.607311이며 이는 Louisiana 주에 속한 수감자가 다른 변수가 동일할 때, 가석방 조건 위반에 대해 로그 오즈를 얼마나 증가시키는지를 나타낸다. p-value가 0.3110으로 나타나 0.05보다 크므로 통계적으로 유의미하지 않은 결과이다. 따라서, Louisiana 주에 속한 수감자가 가석방 조건 위반을 할 확률이 다른 변수가 동일한 경우에 유의하게 증가한다고 할 수 없다.
+
+<br/>
+
+d) (남성, 백인, 40세, Kentucky state, 4개월 수감, 12개월 형량, 중복 범죄, 마약 범죄)의 정보를 가진 수감자가
+가석방 후 조건을 위반할 확률은 얼마인가?
+
+<br/>
+
+```{r}
+logit_p <- -1.660861 + (-0.217389 * 4) + (-0.003789 * 40) + (0.050979 * 1) + ( -0.914462 * 1) + (0.081833 * 12) + ( 1.781361 * 1) + (-0.335724 * 1)
+
+p <- exp(logit_p) / (1 + exp(logit_p))
+
+p
+
+```
+<br/>
+
+e) 다양한 threshold 값에 대해 training set의 가석방 조건 위반 여부를 예측해보자. 이때 값의 변화에 따른
+accuracy, sensitivity, specificity 값을 변화를 그래프로 그려보자.
+
+<br/>
+
+```{r}
+# prob for test set
+train_prob <- predict(model, df_train, type = "response")
+train_pred <- ifelse(train_prob >= 0.5, 1, 0)
+
+# 두 벡터를 팩터로 변환하고 레벨을 명시적으로 지정
+train_pred_factor <- factor(train_pred, levels = c("0", "1"))
+violator_factor <- factor(df_train$Violator, levels = c("0", "1"))
+
+
+conf_matrix <- confusionMatrix(train_pred_factor, violator_factor, positive = "1")
+
+# 혼동 행렬 출력
+print(conf_matrix)
+```
+```{r}
+# prob for test set
+train_prob <- predict(model, df_train, type = "response")
+train_pred <- ifelse(train_prob >= 0.3, 1, 0)
+
+# 두 벡터를 팩터로 변환하고 레벨을 명시적으로 지정
+train_pred_factor <- factor(train_pred, levels = c("0", "1"))
+violator_factor <- factor(df_train$Violator, levels = c("0", "1"))
+
+
+conf_matrix <- confusionMatrix(train_pred_factor, violator_factor, positive = "1")
+
+# 혼동 행렬 출력
+print(conf_matrix)
+```
+```{r}
+thresholds <- seq(0.2, 0.5, by = 0.05)
+
+accuracy_values <- c()
+sensitivity_values <- c()
+specificity_values <- c()
+
+for (threshold in thresholds) {
+    train_pred <- ifelse(train_prob >= threshold, 1, 0)
+    train_pred_factor <- factor(train_pred, levels = c("0", "1"))
+    conf_matrix <- confusionMatrix(train_pred_factor, violator_factor, positive = "1")
+    accuracy_values <- c(accuracy_values, conf_matrix$overall['Accuracy'])
+    sensitivity_values <- c(sensitivity_values, conf_matrix$byClass['Sensitivity'])
+    specificity_values <- c(specificity_values, conf_matrix$byClass['Specificity'])
+}
+
+# Plotting
+plot(thresholds, accuracy_values, type = 'l', col = 'blue', xlab = 'Threshold', ylab = 'Accuracy', main = 'Accuracy vs. Threshold', ylim = c(0, 1))
+lines(thresholds, sensitivity_values, type = 'l', col = 'red')
+lines(thresholds, specificity_values, type = 'l', col = 'green')
+legend("bottomright", legend=c("Accuracy", "Sensitivity", "Specificity"), col=c("blue", "red", "green"), lty=1)
+
+
+```
+<br/>
+
+t값의 증가에 따라 accuracy와 specify가 증가하며, sensitivity는 떨어지는 경향을 볼 수 있다.
+
+<br/>
+
+f) Target의 불균형이 큰 경우, F1 score를 분류모델의 성능지표로 사용할 수 있다. F1 score가 의미하는 것이 무
+엇인지 찾아보자. 그리고 현재 모델에 대해서 여러 threshold 값에 대한 F1 score를 계산해보자. (F1 score
+는 confusionMatrix() 함수에 mode=“everything”을 인수로 추가하여 출력할 수 있다.)
+
+<br/>
+
+
+```{r}
+# Function to calculate F1 score for given threshold
+calculate_f1_score <- function(threshold, train_prob, violator_factor) {
+    train_pred <- ifelse(train_prob >= threshold, "1", "0")
+    train_pred_factor <- factor(train_pred, levels = c("0", "1"))
+    matrix <- confusionMatrix(train_pred_factor, violator_factor, positive = "1", mode = "everything")
+    f1_score <- matrix$byClass['F1']
+    return(f1_score)
+}
+
+# 모델 예측
+train_prob <- predict(model, df_train, type = "response")
+violator_factor <- factor(df_train$Violator, levels = c("0", "1"))
+
+# 임계값에 따른 F1 점수 계산
+thresholds <- seq(0.2, 0.5, by = 0.05)
+f1_scores <- sapply(thresholds, function(threshold) {
+    calculate_f1_score(threshold, train_prob, violator_factor)
+})
+
+# 결과 출력
+for (i in seq_along(thresholds)) {
+    print(paste("F1 Score at t =", thresholds[i], ":", f1_scores[i]))
+}
+
+```
+<br/>
+
+임계값(threshold)이 낮아질수록 F1 점수가 감소하는 경향을 확인할 수 있다. 이는 임계값을 낮추면 모델이 더 많은 예측을 긍정 클래스로 분류하려고 하기 때문에, 다수 클래스에 대한 잘못된 예측이 증가하고 이로 인해 정밀도가 감소하는 경향을 보인다.
+
+따라서 이러한 결과를 고려할 때, 클래스 불균형이 존재하는 경우에는 F1 점수를 분류 모델의 성능지표로 사용하는 것이 적절할 수 있다. F1 점수는 모델이 얼마나 정확하게 예측하는지와 동시에, 다수 클래스에 대한 재현율을 고려하여 모델의 전반적인 성능을 평가할 수 있는 지표이다.
+
+<br/>
+
+g) 수감자의 가석방 여부를 결정하는 심사위원회에서 이 모델을 사용하여 가석방 조건 위반 여부를 예측한다고 하
+자. e), f)의 결과를 바탕으로, 심사위원회의 의사결정을 위해서는 threshold 를 어느 정도의 값으로 사용하는
+것이 합리적일지 생각해보자.
+
+<br/>
+
+accuracy와 specificity는 임계값이 클수록 증가하는 경향을 보이며, sensitivity와 F1 점수는 임계값이 클수록 감소하는 경향을 보인다. 따라서 심사위원회가 가석방 조건 위반 여부를 예측하는데 높은 정확성을 중요시하는 경우, 더 높은 임계값을 선택하는 것이 합리적이다. 이는 모델이 긍정 클래스(가석방 조건 위반)를 더 조심스럽게 예측하도록 하여 잘못된 긍정 예측을 최소화하는 데 도움이 될 수 있다.
+
+<br/>
+
+3번의 logistic regression model에 Lasso regularization을 적용해본다. Target 변수의 불균형이 크므로 accuracy보다는 AUC를 기준으로 Cross validation의 성능을 평가하고, CV 결과를 바탕으로 가장 적합한 모델을 선택하자.
+
+<br/>
+
+```{r}
+trainX <- model.matrix(Violator~., df_train)[, -1]
+trainY <- df_train$Violator
+lasso_model <- glmnet(x=trainX, y=trainY, alpha = 1, family="binomial")
+
+plot(lasso_model, xvar="lambda", label = TRUE)
+```
+
+
+```{r}
+set.seed(123)
+cv_lasso <- cv.glmnet(x = trainX, y = trainY, alpha = 1, family = "binomial", type.measure = "auc", nfolds = 10)
+plot(cv_lasso)
+```
+
+```{r}
+# perforamnce measure 출력
+cv_lasso$cvm
+
+# cv에 사용된 lambda 출력
+cv_lasso$lambda
+
+# nonzero 변수의 수 출력
+cv_lasso$nzero
+
+# 1-se rule 적용하여 lambda 선택
+coef(cv_lasso, s = cv_lasso$lambda.1se)
+```
+
+<br/>
+
+a) 어떠한 기준으로 모델을 선택하였으며, 최종적으로 모델에 어떠한 변수들이 포함되었는가?
+
+<br/>
+
+모델 선택 과정에서 1-SE 규칙을 적용하여 최적의 lambda 값을 결정하였다. 이는 모델의 복잡성을 줄이고 일반화 성능 향상에 도움이 된다. 따라서 선택된 최종 모델은 1-SE 규칙에 따라 lambda 값이 선택된 결과이다. 해당 모델은 Lasso 정규화를 적용한 Logistic Regression 모델로 StateLouisiana, StateVirginia, MultipleOffenses1 변수가 포함되었다.
+
+<br/>
+
+b) 3번의 logistic regression model과 Lasso를 적용한 model의 성능을 나타내는 ROC Curve를 하나의 그래프로 동시에 시각화하고, AUC값을 비교해 보자. Training set과 Test set에 대해 각각 비교해본다. 이 결과로부터 Lasso regularization의 효과가 있는지 분석해보자.
+
+<br/>
+
+```{r}
+pred_train <- prediction(train_prob, df_train$Violator)
+perf_train <- performance(pred_train, "tpr", "fpr")
+plot(perf_train, col = "darkred", lwd = 3)
+
+auc_train <- performance(pred_train, "auc")
+
+test_prob <- predict(model, df_test, type = "response")
+pred_test <- prediction(test_prob, df_test$Violator)
+perf_test <- performance(pred_test, "tpr", "fpr")
+plot(perf_test, col = "blue", lwd = 3, add = TRUE)
+```
+```{r}
+auc_train <- performance(pred_train, "auc")
+print(auc_train@y.values)
+
+auc_test <- performance(pred_test, "auc")
+print(auc_test@y.values)
+```
+<br/>
+
+training set에서의 AUC 값은 0.8762323이고 , test set에서의 AUC값은 0.8115741가 나왔다. test set에 대한 AUC 값이 더 높은 경우가 나타났으므로, Lasso 정규화가 효과가 있었음을 알 수 있다.
+
+<br/>
+
+5. 마지막으로 SVM을 적용해보자. Linear, polynomial, RBF kernel들을 사용하여 SVM 모델을 만들어본다. CV를 활용한 parameter tuning을 통해 좋은 성능의 모델을 찾아보자.
+
+<br/>
+
+```{r}
+svmfit<-svm(Violator~. , data = df_train , kernel = "linear" , cost=10 , scale = TRUE)
+
+# support vector의 index 출력
+svmfit$index
+
+summary(svmfit)
+```
+
+데이터에 대해서 cost가 10일때, support vector가 113개임을 확인할 수 있다.
+할 수 있다.
+
+<br/>
+
+
+
+<br/>
+
+```{r}
+set.seed(123)
+
+tune.out <- tune(svm, Violator~. , data = df_train , kernel = "linear",ranges = list(cost = 10^seq(-1, 1)), 
+                 tunecontrol = tune.control(cross = 10))
+
+# tuning 결과 출력
+summary(tune.out)
+```
+```{r}
+# tuning으로 찾은 best model 추출
+bestmodel <- tune.out$best.model
+
+bestmodel
+```
+10-fold CV를 적용하여 파라미티터를 튜닝하였다.best parameters는 0.1 일때,  0.1144947로 best performance 였임을 확인할 수 있다.그리고 그때의 Support Vector의 갯수는 117개임을 알 수 있다.
+
+<br/>
+
+
+
+```{r}
+svmfit_rbf <- svm(Violator ~ ., data = df_train, kernel = "radial", gamma = 1 , cost =1)
+
+summary(svmfit_rbf)
+
+```
+
+gamma 파라미터 값을 1로 지정하고 RBF Kernel을 사용하였다. support vector는 329개가 나왔음을 확인할 수 있다.
+
+```{r}
+set.seed(123)
+rbf_tune_result <- tune(svm, Violator ~ ., data = df_train, kernel = "radial",ranges = list(cost = 10^seq(-1, 1),
+                    gamma = 10^seq(-1, 1)),tunecontrol = tune.control(cross = 10))
+
+# 튜닝 결과 요약
+summary(rbf_tune_result)
+```
+```{r}
+print(rbf_tune_result$best.parameters)
+```
+
+
+```{r}
+plot(rbf_tune_result)
+```
+
+10-fold CV를 적용하여 파라미티터를 튜닝하였다.best parameters는 cost가 1, gamma 1이며 best performance는 0.09760638 이다.
+
+
+```{r}
+#Polynomial kernel SVM
+svmfit_pol <- svm(Violator ~ ., data = df_train, kernel = "polynomial" , cost =1 , degree=2)
+
+summary(svmfit_pol)
+```
+cost= 1, degree=2 일때 support vector 가 127개임을 알 수 있다.
+
+```{r}
+set.seed(123)
+
+pol_tune <- tune(svm , Violator~. , data = df_train ,kernel = "polynomial",
+                 ranges=list(cost=c(0.1, 1, 10), degree=c(2, 3, 4)), tunecontrol = tune.control(cross = 10))
+summary(pol_tune)
+```
+
+10-fold CV를 적용하여 파라미티터를 튜닝하였다.best performance는 0.103945  이다.
+
+<br/>
+
+
+a) 가장 좋은 성능의 SVM 모델은 무엇인가?
+
+RBF Kernel SVM의error가 0.09760638로 가장 낮았기 때문에 가장 성능 좋은 SVM모델은 RBF Kernel SVM 모델이라고 할 수 있다.
+
+<br/>
+
+b) 위 모델의 training set과 test set에 대한 성능을 평가해보자. 본 예측 문제에 대해 SVM 모델이 logistic regression 모델에 비해 우수하다고 할 수 있는가?
+
+```{r}
+#RBF SVM 모델 성능평가
+bestmodel_rbf<-rbf_tune_result$best.model
+predictions_rbf <- predict(bestmodel_rbf, df_test)
+confusionMatrix(predictions_rbf, df_test$Violator)
+```
+
+<br/>
+
+가장 성능이 좋았던 RBF Kernel SVM 모델의 성능평가를 실시하였을 때 Accuracy : 0.8775, Sensitivity : 0.9944, Specificity : 0.0000이 나왔다. 기존 logistic Regression의 지표들이 더 우수함을 확인 할 수 있다. 따라서 SVM 모델이 logistic regression 모델에 비해 우수하다고 할 수 없다.
+
+<br/>
+
+c) Target 변수의 불균형이 큰 경우 SVM의 성능이 좋지 않을 수 있는가? 만약 그렇다면 원인이 무엇일지 생각해보자.
+
+SVM은 모델을 훈련시킬 때 클래스 간의 균형을 유지하는 것이 중요하다. Target 변수의 불균형이 심한 경우 모델이 소수 클래스에 대해 충분한 학습을 수행하지 못 할 수 있다. 클래스 간의 불균형이 심할 경우, 소수 클래스에 대한 결정 경계를 학습하는 데 어려움을 겪을 수 있다. 이로 인해 소수 클래스를 올바르게 분류하는 데 어려움이 생길 수 있다.
